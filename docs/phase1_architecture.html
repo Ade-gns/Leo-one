@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>Leo-One RMM — Phase 1 : Architecture Globale</title>
+  <style>
+    body { font-family: Arial, sans-serif; font-size: 11pt; margin: 2.5cm; color: #1a1a1a; }
+    h1 { font-size: 20pt; color: #1e3a5f; border-bottom: 3px solid #1e3a5f; padding-bottom: 8px; margin-top: 0; }
+    h2 { font-size: 15pt; color: #1e3a5f; border-bottom: 1px solid #aac4e0; padding-bottom: 4px; margin-top: 32px; }
+    h3 { font-size: 12pt; color: #2c5f8a; margin-top: 20px; }
+    pre, code { font-family: "Courier New", monospace; font-size: 9pt; background: #f4f6f9; border: 1px solid #d0d7e2; border-radius: 4px; padding: 12px; white-space: pre; display: block; margin: 10px 0; line-height: 1.5; }
+    table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 10pt; }
+    th { background: #1e3a5f; color: white; padding: 8px 12px; text-align: left; }
+    td { border: 1px solid #c8d5e2; padding: 7px 12px; }
+    tr:nth-child(even) td { background: #f0f5fb; }
+    .note { background: #fff8e1; border-left: 4px solid #f0a500; padding: 10px 14px; margin: 12px 0; font-size: 10pt; }
+    .section-num { color: #1e3a5f; font-weight: bold; }
+    .subtitle { color: #555; font-size: 12pt; margin-top: -8px; margin-bottom: 24px; }
+    .cover { text-align: center; padding: 40px 0 60px 0; }
+    .cover h1 { font-size: 26pt; border: none; }
+    .cover .meta { font-size: 10pt; color: #666; margin-top: 16px; }
+    ul li { margin: 4px 0; }
+    p { line-height: 1.6; }
+  </style>
+</head>
+<body>
+
+<!-- PAGE DE COUVERTURE -->
+<div class="cover">
+  <h1>Leo-One RMM</h1>
+  <p style="font-size:15pt; color:#2c5f8a; font-weight:bold;">Alternative moderne à Action1, NinjaOne, ConnectWise Automate</p>
+  <hr style="width:60%; border-color:#1e3a5f; margin: 20px auto;">
+  <p style="font-size:14pt; color:#444;">PHASE 1 — Architecture Globale, Protocoles Sécurisés &amp; Cycle de Vie de l'Agent</p>
+  <div class="meta">
+    <p>Stack : Agent C | Backend Go | Frontend React/TS | PostgreSQL + TimescaleDB</p>
+    <p>Protocole Agent ↔ Backend : WebSocket Secure (WSS) + mTLS</p>
+    <p>Document généré le 24 juin 2026</p>
+  </div>
+</div>
+
+<hr style="border-color:#1e3a5f; border-width:2px; margin-bottom:40px;">
+
+<!-- SECTION 1 -->
+<h2>1. Vue d'Ensemble du Système — Macro-Architecture</h2>
+
+<p>Le système Leo-One est composé de trois couches principales communiquant exclusivement via TLS 1.3 :</p>
+
+<ul>
+  <li><strong>Agents C</strong> — démons légers déployés sur chaque machine cible (Windows, Linux, macOS)</li>
+  <li><strong>Backend Go</strong> — serveur central traitant les données, exposant les API REST et le gateway agent</li>
+  <li><strong>Frontend React/TS</strong> — interface web temps réel pour les techniciens MSP</li>
+</ul>
+
+<pre>
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│  RÉSEAU PUBLIC / INTERNET (TLS 1.3 obligatoire sur toutes les connexions)      │
+└─────────────────────────────────────────────────────────────────────────────────┘
+
+╔══════════════════════════╗      WSS/TLS 1.3+mTLS    ╔══════════════════════════════╗
+║   MACHINES CIBLES        ║ ════════════════════════> ║   INFRASTRUCTURE SERVEUR    ║
+║                          ║                           ║                              ║
+║  ┌────────────────────┐  ║                           ║  ┌──────────────────────┐   ║
+║  │  Agent C (daemon)  │  ║                           ║  │  Reverse Proxy / LB  │   ║
+║  │  • Collecte métr.  │  ║                           ║  │  (TLS Termination)   │   ║
+║  │  • Exec. scripts   │  ║                           ║  └──────────┬───────────┘   ║
+║  │  • Inventaire HW   │  ║                           ║             │               ║
+║  │  • Reconnexion auto│  ║                           ║  ┌──────────▼───────────┐   ║
+║  │  • Clé mTLS locale │  ║                           ║  │  Backend Go          │   ║
+║  └────────────────────┘  ║                           ║  │  Agent Gateway (WSS) │   ║
+║                          ║                           ║  │  REST API (JSON)     │   ║
+║  [Windows / Linux / macOS]                           ║  │  Auth / RBAC / MFA   │   ║
+╚══════════════════════════╝                           ║  │  Business Logic      │   ║
+                                                       ║  └──────────┬───────────┘   ║
+╔══════════════════════════╗      HTTPS / WSS          ║             │               ║
+║   UTILISATEURS (MSP)    ║ <════════════════════════> ║  ┌──────────▼───────────┐   ║
+║                          ║                           ║  │  PostgreSQL          │   ║
+║  ┌────────────────────┐  ║                           ║  │  + TimescaleDB       │   ║
+║  │  Navigateur Web    │  ║                           ║  └──────────────────────┘   ║
+║  │  React / TS / TWC  │  ║                           ╚══════════════════════════════╝
+║  └────────────────────┘  ║
+╚══════════════════════════╝
+</pre>
+
+<!-- SECTION 2 -->
+<h2>2. Modèle Multi-Tenant (Mode MSP)</h2>
+
+<p>Le système est organisé en trois niveaux d'isolation. Chaque entité est systématiquement associée à un <code>tenant_id</code> cryptographique, validé en middleware à chaque requête.</p>
+
+<pre>
+Platform (Leo-One SaaS / On-Prem)
+│
+├── Tenant A  (ex: "Cabinet Dupont IT")
+│   ├── Workspace "Paris"
+│   │   ├── Agent-001  (Windows Server)
+│   │   └── Agent-002  (Windows 10)
+│   └── Workspace "Lyon"
+│       └── Agent-003  (Ubuntu 22.04)
+│
+└── Tenant B  (ex: "Mairie de Bordeaux")
+    └── Workspace "Hôtel de Ville"
+        └── Agent-004  (Windows 11)
+</pre>
+
+<div class="note">
+  <strong>Règle d'isolation stricte :</strong> il n'existe aucun chemin de code cross-tenant. Toute requête sans <code>tenant_id</code> valide et cryptographiquement signé est rejetée par le middleware avant d'atteindre la logique métier.
+</div>
+
+<!-- SECTION 3 -->
+<h2>3. Flux Réseau Sécurisés</h2>
+
+<h3>3.1 — Modèle de Sécurité : Mutual TLS (mTLS)</h3>
+
+<p>Protocole retenu : <strong>WebSocket Secure (WSS)</strong> sur TLS 1.3 avec authentification mutuelle par certificat.</p>
+
+<pre>
+┌──────────────────────────────────────────────────────────────────┐
+│  MODÈLE DE SÉCURITÉ TLS — Mutual TLS (mTLS)                     │
+│                                                                  │
+│  Autorité de Certification (CA) interne, gérée par le Backend   │
+│                                                                  │
+│  ┌────────────────┐                  ┌────────────────────────┐  │
+│  │   Agent C      │                  │   Backend Go           │  │
+│  │                │                  │                        │  │
+│  │ cert_agent.pem │── présente ────> │ valide via CA interne  │  │
+│  │ key_agent.pem  │                  │                        │  │
+│  │                │ <── présente ─── │ cert_server.pem        │  │
+│  │ valide via     │                  │                        │  │
+│  │ CA pinné       │                  │                        │  │
+│  │ (embarqué)     │                  │                        │  │
+│  └────────────────┘                  └────────────────────────┘  │
+│                                                                  │
+│  • TLS 1.3 minimum                                               │
+│  • Suite : TLS_AES_256_GCM_SHA384                               │
+│  • Certificate pinning côté agent : hash SHA-256 du cert CA     │
+│    embarqué au moment de l'enrollment                            │
+└──────────────────────────────────────────────────────────────────┘
+</pre>
+
+<h3>3.2 — Handshake WSS Complet</h3>
+
+<pre>
+Agent C                                    Backend Go (Agent Gateway)
+    │                                              │
+    │──── TCP connect → port 443 ───────────────> │
+    │──── TLS 1.3 ClientHello (cert client) ────> │
+    │&lt;─── TLS 1.3 ServerHello + ServerCert ─────  │
+    │──── TLS 1.3 Finished (mTLS complet) ──────> │
+    │                                              │
+    │──── HTTP GET /ws/agent HTTP/1.1 ──────────> │
+    │     Headers:                                 │
+    │       Upgrade: websocket                     │
+    │       Connection: Upgrade                    │
+    │       Sec-WebSocket-Key: &lt;base64&gt;            │
+    │       Sec-WebSocket-Version: 13              │
+    │       X-Agent-ID: &lt;uuid&gt;                     │
+    │       X-Agent-Version: 1.0.0                 │
+    │                                              │
+    │&lt;─── HTTP 101 Switching Protocols ──────────  │
+    │     Sec-WebSocket-Accept: &lt;hash&gt;             │
+    │                                              │
+    │══════ Connexion WSS persistante ouverte ════ │
+    │                                              │
+    │──── Frame TEXT : HELLO ───────────────────> │
+    │&lt;─── Frame TEXT : HELLO_ACK ───────────────  │
+</pre>
+
+<h3>3.3 — Enveloppe de Message JSON (format canonique)</h3>
+
+<p>Tous les messages transitent dans des frames WebSocket de type TEXT avec cette enveloppe commune :</p>
+
+<pre>
+{
+  "v":    1,
+  "type": "METRICS",
+  "id":   "01J2K...",
+  "ts":   1719230400123,
+  "body": { ... }
+}
+</pre>
+
+<table>
+  <tr><th>Champ</th><th>Type</th><th>Description</th></tr>
+  <tr><td><code>v</code></td><td>int</td><td>Version du protocole (actuellement 1)</td></tr>
+  <tr><td><code>type</code></td><td>string</td><td>Type de message (voir catalogue ci-dessous)</td></tr>
+  <tr><td><code>id</code></td><td>string</td><td>UUID v7 généré par l'émetteur (pour ACK / corrélation)</td></tr>
+  <tr><td><code>ts</code></td><td>int64</td><td>Timestamp Unix en millisecondes (émetteur)</td></tr>
+  <tr><td><code>body</code></td><td>object</td><td>Payload spécifique au type de message</td></tr>
+</table>
+
+<h3>3.4 — Catalogue des Types de Messages</h3>
+
+<p><strong>Agent → Backend :</strong></p>
+<table>
+  <tr><th>type</th><th>Fréquence</th><th>Description</th></tr>
+  <tr><td><code>HELLO</code></td><td>Une fois à la connexion</td><td>Identification, version, OS</td></tr>
+  <tr><td><code>HEARTBEAT</code></td><td>Toutes les 30s</td><td>Preuve de vie, numéro de séquence</td></tr>
+  <tr><td><code>METRICS</code></td><td>Toutes les 60s</td><td>CPU / RAM / Disk / Net</td></tr>
+  <tr><td><code>INVENTORY</code></td><td>Sur demande ou toutes les 24h</td><td>Inventaire HW/SW complet</td></tr>
+  <tr><td><code>CMD_RESULT</code></td><td>Après exécution</td><td>Résultat d'une commande (stdout/stderr/exit_code)</td></tr>
+  <tr><td><code>LOG</code></td><td>Sur événement</td><td>Erreur ou événement notable de l'agent</td></tr>
+</table>
+
+<p><strong>Backend → Agent :</strong></p>
+<table>
+  <tr><th>type</th><th>Description</th></tr>
+  <tr><td><code>HELLO_ACK</code></td><td>Confirmation de session + paramètres serveur (fréquences, config)</td></tr>
+  <tr><td><code>EXEC_SCRIPT</code></td><td>Exécuter un script PS1 / Bash / CMD avec timeout</td></tr>
+  <tr><td><code>INSTALL_PKG</code></td><td>Installer un paquet (MSI / DEB / RPM) en mode silencieux</td></tr>
+  <tr><td><code>COLLECT_INVENTORY</code></td><td>Déclencher un inventaire immédiat</td></tr>
+  <tr><td><code>REBOOT</code></td><td>Redémarrage planifié ou immédiat</td></tr>
+  <tr><td><code>PING</code></td><td>Test de latence — l'agent répond PONG</td></tr>
+  <tr><td><code>CONFIG_UPDATE</code></td><td>Mise à jour des paramètres de l'agent (ex : fréquence métriques)</td></tr>
+</table>
+
+<!-- SECTION 4 -->
+<h2>4. Cycle de Vie Complet de l'Agent C</h2>
+
+<h3>4.1 — Phase d'Installation</h3>
+
+<pre>
+Administrateur MSP
+      │
+      ▼
+┌─────────────────────────────────────────────────────────┐
+│  Console Web : génère un "Enrollment Package"           │
+│                                                         │
+│  Contenu du package :                                   │
+│  ├── Binaire agent (leo-agent.exe / leo-agent)          │
+│  ├── Fichier de config initial (agent_bootstrap.conf)   │
+│  │   ├── server_url: wss://rmm.example.com/agent        │
+│  │   ├── enrollment_token: &lt;JWT one-shot, TTL 24h&gt;      │
+│  │   └── ca_fingerprint: &lt;SHA-256 du certificat CA&gt;     │
+│  └── Script d'installation (install.ps1 / install.sh)  │
+└─────────────────────────────────────────────────────────┘
+      │
+      ▼  Exécuté sur la machine cible
+┌─────────────────────────────────────────────────────────┐
+│  Script d'installation                                  │
+│  1. Copie le binaire dans le répertoire système         │
+│     Windows : C:\Program Files\LeoOne\agent\            │
+│     Linux   : /opt/leo-one/agent/                       │
+│     macOS   : /Library/Application Support/LeoOne/      │
+│  2. Installe le service système                         │
+│     Windows : sc.exe create LeoOneAgent ...             │
+│     Linux   : systemd unit file                         │
+│     macOS   : launchd plist                             │
+│  3. Démarre le service → première exécution             │
+└─────────────────────────────────────────────────────────┘
+</pre>
+
+<h3>4.2 — Phase d'Enregistrement (Enrollment — une seule fois)</h3>
+
+<pre>
+Agent C (1er démarrage)                     Backend Go
+        │                                        │
+        │  1. Lecture de agent_bootstrap.conf     │
+        │  2. Détecte absence de agent.uuid       │
+        │  3. Génère paire de clés RSA-4096       │
+        │     → private_key.pem (stocké local)   │
+        │     → public_key.pem                   │
+        │                                        │
+        │  4. Collecte Hardware ID :              │
+        │     - UUID BIOS/UEFI (Windows: WMI)    │
+        │     - /etc/machine-id (Linux)           │
+        │     - IOPlatformUUID (macOS)            │
+        │                                        │
+        │──── HTTPS POST /api/v1/enroll ────────>│
+        │     {                                  │
+        │       "enrollment_token": "...",        │
+        │       "public_key": "&lt;PEM&gt;",           │
+        │       "hostname": "PC-DUPONT",          │
+        │       "os": "Windows 11 23H2",         │
+        │       "arch": "amd64",                 │
+        │       "hardware_id": "&lt;UUID BIOS&gt;"     │
+        │     }                                  │
+        │                                        │
+        │&lt;─── 201 Created ─────────────────────  │
+        │     {                                  │
+        │       "agent_id": "&lt;UUID v4&gt;",          │
+        │       "tenant_id": "&lt;UUID v4&gt;",         │
+        │       "client_cert": "&lt;PEM signé CA&gt;", │
+        │       "ws_endpoint": "wss://..."        │
+        │     }                                  │
+        │                                        │
+        │  5. Stocke dans agent.conf :            │
+        │     - agent_id, tenant_id              │
+        │     - client_cert.pem                  │
+        │  6. Supprime enrollment_token          │
+        │  7. Supprime agent_bootstrap.conf      │
+        │  → Passe en boucle de monitoring       │
+</pre>
+
+<div class="note">
+  <strong>Sécurité de l'enrollment :</strong> le <code>enrollment_token</code> est un JWT signé, à usage unique (invalidé côté backend dès la première utilisation), avec TTL de 24h. Il ne peut pas servir à enregistrer deux agents différents.
+</div>
+
+<h3>4.3 — Boucle Principale de Monitoring (état nominal)</h3>
+
+<pre>
+Démarrage du service
+     │
+     ▼
+Lecture de agent.conf ──── absent/corrompu ──> Log erreur critique + exit
+
+     │
+     ▼
+┌──────────────────────────────────────────────────────────┐
+│  CONNEXION (avec reconnexion à backoff exponentiel)      │
+│  1. Ouverture socket TCP → server:443                    │
+│  2. TLS 1.3 Handshake mTLS (présente client_cert.pem)   │
+│  3. Vérification CA pinné (ca_fingerprint SHA-256)       │
+│  4. HTTP Upgrade → WebSocket                             │
+│  5. Envoi message HELLO                                  │
+│  6. Réception HELLO_ACK + paramètres serveur             │
+└──────────────────────────────────────────────────────────┘
+     │ Connecté
+     ▼
+┌──────────────────────────────────────────────────────────┐
+│  THREADS PARALLÈLES                                      │
+│                                                          │
+│  Thread 1 — HEARTBEAT (toutes les 30 secondes)          │
+│    { "type":"HEARTBEAT", "ts":&lt;unix_ms&gt;, "seq":&lt;n&gt; }   │
+│                                                          │
+│  Thread 2 — MÉTRIQUES (toutes les 60 secondes)          │
+│    Collecte :                                            │
+│     • CPU  : usage global + par cœur (%)                │
+│     • RAM  : total / utilisé / disponible (bytes)        │
+│     • Disk : par volume/partition (total/used/free)      │
+│     • Net  : bytes_in/out par interface réseau           │
+│     • Procs: top 10 par consommation CPU                │
+│    Envoi payload JSON                                    │
+│                                                          │
+│  Thread 3 — RÉCEPTION COMMANDES (écoute permanente)     │
+│    Traite : EXEC_SCRIPT, INSTALL_PKG, REBOOT,           │
+│             COLLECT_INVENTORY, PING, CONFIG_UPDATE       │
+└──────────────────────────────────────────────────────────┘
+     │ Déconnexion / Erreur réseau
+     ▼
+┌──────────────────────────────┐
+│  Backoff exponentiel         │
+│  Tentative 1 :  5s           │
+│  Tentative 2 : 10s           │
+│  Tentative 3 : 30s           │
+│  Tentative 4+: 60s (max)    │
+└──────────────────────────────┘
+     │ Reconnexion réussie → retour boucle principale
+</pre>
+
+<h3>4.4 — Stockage Local de l'Agent</h3>
+
+<pre>
+Windows : C:\ProgramData\LeoOne\
+├── agent.conf            ← config permanente (agent_id, tenant_id, endpoint)
+├── certs\
+│   ├── client_cert.pem   ← certificat signé par le CA backend
+│   ├── client_key.pem    ← clé privée locale (permissions restreintes)
+│   └── ca.fingerprint    ← hash SHA-256 du CA pour certificate pinning
+└── logs\
+    └── agent.log         ← rotation 7 jours, 10 MB max par fichier
+
+Linux / macOS : /opt/leo-one/  (même structure)
+</pre>
+
+<div class="note">
+  <strong>Sécurité locale :</strong> <code>client_key.pem</code> est lisible uniquement par l'utilisateur système dédié (<code>leo-agent</code> sur Linux/macOS, <code>NT AUTHORITY\SYSTEM</code> sur Windows). Les permissions sont vérifiées au démarrage — si elles sont incorrectes, l'agent refuse de démarrer et écrit une erreur critique dans le log.
+</div>
+
+<!-- SECTION 5 -->
+<h2>5. Récapitulatif des Décisions Architecturales</h2>
+
+<table>
+  <tr><th>Élément</th><th>Décision retenue</th></tr>
+  <tr><td>Protocole Agent ↔ Backend</td><td>WebSocket Secure (WSS)</td></tr>
+  <tr><td>Sécurité transport</td><td>TLS 1.3 obligatoire, mTLS pour les agents</td></tr>
+  <tr><td>Suite cryptographique</td><td>TLS_AES_256_GCM_SHA384</td></tr>
+  <tr><td>Authentification agent</td><td>Certificat client signé par CA interne (post-enrollment)</td></tr>
+  <tr><td>Authentification initiale</td><td>Enrollment token JWT one-shot (TTL 24h, usage unique)</td></tr>
+  <tr><td>Identifiant machine</td><td>UUID BIOS/UEFI (Windows: WMI) · /etc/machine-id (Linux) · IOPlatformUUID (macOS)</td></tr>
+  <tr><td>Isolation multi-tenant</td><td>tenant_id sur toutes les entités, validé en middleware Go</td></tr>
+  <tr><td>Fréquence heartbeat</td><td>30 secondes</td></tr>
+  <tr><td>Fréquence métriques</td><td>60 secondes (configurable par tenant via CONFIG_UPDATE)</td></tr>
+  <tr><td>Reconnexion agent</td><td>Backoff exponentiel — cap à 60 secondes</td></tr>
+  <tr><td>Format des messages</td><td>JSON canonique avec enveloppe v / type / id / ts / body</td></tr>
+  <tr><td>Stockage local agent</td><td>Fichiers avec permissions OS restrictives, rotation logs 7j/10MB</td></tr>
+</table>
+
+<br>
+<hr style="border-color:#1e3a5f; margin-top:40px;">
+<p style="text-align:center; color:#888; font-size:9pt;">Leo-One RMM — Document Phase 1 — Confidentiel</p>
+
+</body>
+</html>

@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>Leo-One RMM — Phase 2 : Arborescence &amp; Docker/K8s</title>
+  <style>
+    body { font-family: Arial, sans-serif; font-size: 11pt; margin: 2.5cm; color: #1a1a1a; }
+    h1 { font-size: 20pt; color: #1e3a5f; border-bottom: 3px solid #1e3a5f; padding-bottom: 8px; margin-top: 0; }
+    h2 { font-size: 15pt; color: #1e3a5f; border-bottom: 1px solid #aac4e0; padding-bottom: 4px; margin-top: 32px; }
+    h3 { font-size: 12pt; color: #2c5f8a; margin-top: 20px; }
+    pre, code { font-family: "Courier New", monospace; font-size: 9pt; background: #f4f6f9; border: 1px solid #d0d7e2; border-radius: 4px; padding: 12px; white-space: pre; display: block; margin: 10px 0; line-height: 1.5; }
+    table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 10pt; }
+    th { background: #1e3a5f; color: white; padding: 8px 12px; text-align: left; }
+    td { border: 1px solid #c8d5e2; padding: 7px 12px; }
+    tr:nth-child(even) td { background: #f0f5fb; }
+    .note { background: #fff8e1; border-left: 4px solid #f0a500; padding: 10px 14px; margin: 12px 0; font-size: 10pt; }
+    .cover { text-align: center; padding: 40px 0 60px 0; }
+    .cover h1 { font-size: 26pt; border: none; }
+    .cover .meta { font-size: 10pt; color: #666; margin-top: 16px; }
+    ul li { margin: 4px 0; }
+    p { line-height: 1.6; }
+  </style>
+</head>
+<body>
+
+<div class="cover">
+  <h1>Leo-One RMM</h1>
+  <p style="font-size:15pt; color:#2c5f8a; font-weight:bold;">Alternative moderne à Action1, NinjaOne, ConnectWise Automate</p>
+  <hr style="width:60%; border-color:#1e3a5f; margin: 20px auto;">
+  <p style="font-size:14pt; color:#444;">PHASE 2 — Arborescence Complète du Projet &amp; Configuration Docker/Kubernetes</p>
+  <div class="meta">
+    <p>Stack : Agent C | Backend Go (Chi) | Frontend React/TS (Zustand + React Query) | PostgreSQL + TimescaleDB</p>
+    <p>Document généré le 24 juin 2026</p>
+  </div>
+</div>
+
+<hr style="border-color:#1e3a5f; border-width:2px; margin-bottom:40px;">
+
+<!-- SECTION 1 -->
+<h2>1. Arborescence Globale du Monorepo</h2>
+
+<pre>
+leo-one/
+├── agent/                        # Agent C (daemon machine cible)
+├── backend/                      # Serveur Go (Clean Architecture)
+├── frontend/                     # React + TypeScript + Tailwind
+├── infra/                        # Docker, Kubernetes, scripts CI
+├── docs/                         # Documentation technique
+└── scripts/                      # Build, packaging, release
+</pre>
+
+<!-- SECTION 2 -->
+<h2>2. Agent C — Arborescence Détaillée</h2>
+
+<pre>
+agent/
+├── CMakeLists.txt                    # Build system principal
+├── Dockerfile.builder                # Image de cross-compilation
+│
+├── include/
+│   └── leo_agent.h                   # Header public (types, constantes globales)
+│
+├── src/
+│   ├── main.c                        # Point d'entrée, init service OS
+│   ├── agent.c / agent.h             # Orchestrateur principal, boucle de vie
+│   ├── config.c / config.h           # Lecture/écriture agent.conf (INI)
+│   ├── connection.c / connection.h   # WSS : connect, send, recv, reconnect
+│   ├── enrollment.c / enrollment.h   # Processus d'enrollment (1 seule fois)
+│   ├── heartbeat.c / heartbeat.h     # Thread heartbeat (30s)
+│   ├── metrics.c / metrics.h         # Interface générique collecte métriques
+│   ├── inventory.c / inventory.h     # Interface générique inventaire HW/SW
+│   ├── executor.c / executor.h       # Exécution scripts (PS1/Bash/CMD)
+│   ├── protocol.c / protocol.h       # Sérialisation/désérialisation JSON
+│   └── logger.c / logger.h           # Logger (niveaux, rotation fichier)
+│
+├── platform/
+│   ├── windows/
+│   │   ├── metrics_win.c             # CPU/RAM/Disk via PDH + WMI
+│   │   ├── inventory_win.c           # Inventaire via WMI (COM)
+│   │   ├── service_win.c             # Windows Service (SCM)
+│   │   ├── executor_win.c            # CreateProcess, ShellExecuteEx
+│   │   └── crypto_win.c              # BCrypt API (génération clé RSA)
+│   ├── linux/
+│   │   ├── metrics_linux.c           # /proc/stat, /proc/meminfo, /sys/
+│   │   ├── inventory_linux.c         # /sys/class, lspci, dpkg/rpm
+│   │   ├── service_linux.c           # systemd sd_notify
+│   │   ├── executor_linux.c          # fork/execve
+│   │   └── crypto_linux.c            # OpenSSL (libssl statique)
+│   └── macos/
+│       ├── metrics_macos.c           # sysctl, IOKit, mach_host_info
+│       ├── inventory_macos.c         # system_profiler, IOKit
+│       ├── service_macos.c           # launchd (plist)
+│       ├── executor_macos.c          # posix_spawn
+│       └── crypto_macos.c            # SecKey API (Security.framework)
+│
+└── third_party/
+    ├── libwebsockets/                # vendored (v4.x, build statique)
+    ├── cjson/                        # cJSON (parsing JSON léger)
+    └── mbedtls/                      # mbedTLS (fallback TLS si OpenSSL absent)
+</pre>
+
+<!-- SECTION 3 -->
+<h2>3. Backend Go — Arborescence Détaillée (Clean Architecture)</h2>
+
+<p>L'architecture suit le principe de dépendance inversée : les couches internes (domain, application) ne connaissent pas les couches externes (infrastructure, interfaces). Seules les interfaces sont partagées.</p>
+
+<pre>
+backend/
+├── go.mod
+├── go.sum
+├── Dockerfile
+│
+├── cmd/
+│   └── server/
+│       └── main.go                   # Bootstrap : config, DI, démarrage
+│
+├── internal/
+│   │
+│   ├── domain/                       # Couche 1 : Entités pures (0 dépendance externe)
+│   │   ├── agent/
+│   │   │   ├── agent.go              # struct Agent, AgentStatus, AgentOS
+│   │   │   ├── repository.go         # interface AgentRepository
+│   │   │   └── service.go            # interface AgentDomainService
+│   │   ├── tenant/
+│   │   │   ├── tenant.go             # struct Tenant, Plan, Limits
+│   │   │   └── repository.go         # interface TenantRepository
+│   │   ├── metric/
+│   │   │   ├── metric.go             # struct MetricPoint, MetricType
+│   │   │   └── repository.go         # interface MetricRepository
+│   │   ├── alert/
+│   │   │   ├── alert.go              # struct Alert, AlertRule, Severity
+│   │   │   └── repository.go
+│   │   ├── ticket/
+│   │   │   ├── ticket.go             # struct Ticket, Comment, Priority
+│   │   │   └── repository.go
+│   │   └── user/
+│   │       ├── user.go               # struct User, Role, Permission
+│   │       └── repository.go
+│   │
+│   ├── application/                  # Couche 2 : Use Cases (orchestration)
+│   │   ├── agent/
+│   │   │   ├── enroll_agent.go       # UC : Enrollment d'un nouvel agent
+│   │   │   ├── list_agents.go        # UC : Lister agents par tenant
+│   │   │   ├── get_agent.go          # UC : Détail d'un agent
+│   │   │   └── execute_command.go    # UC : Envoyer commande à un agent
+│   │   ├── metric/
+│   │   │   ├── ingest_metrics.go     # UC : Ingestion batch métriques
+│   │   │   └── query_metrics.go      # UC : Requête métriques (range)
+│   │   ├── alert/
+│   │   │   ├── evaluate_rules.go     # UC : Évaluation règles d'alerte
+│   │   │   └── acknowledge_alert.go  # UC : Acquittement alerte
+│   │   ├── ticket/
+│   │   │   ├── create_ticket.go
+│   │   │   └── update_ticket.go
+│   │   └── auth/
+│   │       ├── login.go              # UC : Login + MFA
+│   │       ├── refresh_token.go      # UC : Refresh JWT
+│   │       └── manage_users.go       # UC : CRUD utilisateurs + rôles
+│   │
+│   ├── infrastructure/               # Couche 3 : Implémentations concrètes
+│   │   ├── persistence/
+│   │   │   └── postgres/
+│   │   │       ├── db.go             # Pool de connexions (pgx/v5)
+│   │   │       ├── agent_repo.go
+│   │   │       ├── tenant_repo.go
+│   │   │       ├── metric_repo.go    # Requêtes TimescaleDB (hypertables)
+│   │   │       ├── alert_repo.go
+│   │   │       ├── ticket_repo.go
+│   │   │       └── user_repo.go
+│   │   ├── websocket/
+│   │   │   ├── hub.go                # Hub WSS : registre des connexions actives
+│   │   │   ├── client.go             # struct Client (une connexion agent)
+│   │   │   └── dispatcher.go         # Routing des messages entrants
+│   │   ├── ca/
+│   │   │   ├── ca.go                 # CA interne : signe les certificats agents
+│   │   │   └── cert_store.go         # Stockage/révocation certificats
+│   │   └── cache/
+│   │       └── memory_cache.go       # Cache in-process (sessions WSS actives)
+│   │
+│   └── interfaces/                   # Couche 4 : Handlers (points d'entrée)
+│       ├── http/
+│       │   ├── router.go             # Montage Chi + middlewares globaux
+│       │   ├── middleware/
+│       │   │   ├── auth.go           # Validation JWT + extraction tenant_id
+│       │   │   ├── rbac.go           # Vérification permissions par rôle
+│       │   │   ├── tenant.go         # Injection tenant_id dans context
+│       │   │   ├── logger.go         # Log structuré par requête
+│       │   │   └── rate_limit.go     # Rate limiting par tenant
+│       │   └── handler/
+│       │       ├── agent_handler.go
+│       │       ├── metric_handler.go
+│       │       ├── alert_handler.go
+│       │       ├── ticket_handler.go
+│       │       ├── auth_handler.go
+│       │       └── tenant_handler.go
+│       └── ws/
+│           └── agent_ws_handler.go   # Upgrade HTTP → WSS agent
+│
+├── pkg/                              # Packages partagés, sans logique métier
+│   ├── config/
+│   │   └── config.go                 # Lecture env vars / fichier YAML
+│   ├── logger/
+│   │   └── logger.go                 # Logger structuré (slog)
+│   ├── crypto/
+│   │   ├── jwt.go                    # Génération/validation JWT (RS256)
+│   │   └── password.go               # Hash argon2id
+│   ├── errors/
+│   │   └── errors.go                 # Types d'erreurs domaine + codes HTTP
+│   └── pagination/
+│       └── pagination.go             # Helpers cursor-based pagination
+│
+└── migrations/
+    ├── 001_init_schema.sql
+    ├── 002_timescaledb_hypertables.sql
+    └── 003_rbac_seed.sql
+</pre>
+
+<!-- SECTION 4 -->
+<h2>4. Frontend React/TypeScript — Arborescence Détaillée</h2>
+
+<p>Framework de state : <strong>Zustand</strong> (état UI global) + <strong>React Query</strong> (cache serveur). Composants UI : <strong>Shadcn/ui</strong> + <strong>Tailwind CSS</strong>. Build tool : <strong>Vite</strong>.</p>
+
+<pre>
+frontend/
+├── package.json
+├── tsconfig.json
+├── vite.config.ts
+├── tailwind.config.ts
+├── components.json                   # Config Shadcn/ui
+├── Dockerfile
+│
+├── public/
+│   └── favicon.svg
+│
+└── src/
+    ├── main.tsx                      # Point d'entrée React
+    ├── App.tsx                       # Router racine + providers
+    │
+    ├── api/                          # Clients HTTP (fetch + React Query)
+    │   ├── client.ts                 # Instance fetch configurée (base URL, interceptors JWT)
+    │   ├── agents.ts
+    │   ├── metrics.ts
+    │   ├── alerts.ts
+    │   ├── tickets.ts
+    │   └── auth.ts
+    │
+    ├── store/                        # État global Zustand
+    │   ├── auth.store.ts             # Utilisateur connecté, token, tenant
+    │   ├── ui.store.ts               # Sidebar, thème, notifications
+    │   └── ws.store.ts               # État connexion WebSocket live
+    │
+    ├── hooks/                        # React Query hooks (données serveur)
+    │   ├── useAgents.ts
+    │   ├── useMetrics.ts
+    │   ├── useAlerts.ts
+    │   ├── useTickets.ts
+    │   └── useWebSocket.ts           # Hook WS pour live métriques
+    │
+    ├── types/                        # Types TypeScript partagés
+    │   ├── agent.ts
+    │   ├── metric.ts
+    │   ├── alert.ts
+    │   ├── ticket.ts
+    │   ├── user.ts
+    │   └── api.ts                    # Enveloppes API (pagination, erreurs)
+    │
+    ├── components/
+    │   ├── ui/                       # Composants Shadcn/ui (générés)
+    │   ├── layout/
+    │   │   ├── AppShell.tsx          # Layout principal (sidebar + topbar + content)
+    │   │   ├── Sidebar.tsx
+    │   │   ├── Topbar.tsx
+    │   │   └── PageHeader.tsx
+    │   ├── dashboard/
+    │   │   ├── StatCard.tsx
+    │   │   ├── AgentStatusChart.tsx
+    │   │   └── RecentAlerts.tsx
+    │   ├── agents/
+    │   │   ├── AgentTable.tsx
+    │   │   ├── AgentStatusBadge.tsx
+    │   │   ├── AgentDetailPanel.tsx
+    │   │   └── AgentCommandModal.tsx
+    │   ├── metrics/
+    │   │   ├── CpuChart.tsx
+    │   │   ├── RamChart.tsx
+    │   │   ├── DiskUsageBar.tsx
+    │   │   └── MetricsGrid.tsx
+    │   ├── alerts/
+    │   │   ├── AlertList.tsx
+    │   │   ├── AlertRuleForm.tsx
+    │   │   └── AlertSeverityBadge.tsx
+    │   └── tickets/
+    │       ├── TicketList.tsx
+    │       ├── TicketDetail.tsx
+    │       └── TicketForm.tsx
+    │
+    └── pages/
+        ├── LoginPage.tsx
+        ├── DashboardPage.tsx
+        ├── AgentsPage.tsx
+        ├── AgentDetailPage.tsx
+        ├── AlertsPage.tsx
+        ├── TicketsPage.tsx
+        ├── SettingsPage.tsx
+        └── NotFoundPage.tsx
+</pre>
+
+<!-- SECTION 5 -->
+<h2>5. Infrastructure — Docker &amp; Kubernetes</h2>
+
+<pre>
+infra/
+├── docker/
+│   ├── docker-compose.yml            # Environnement de développement complet
+│   └── docker-compose.prod.yml       # Surcharge pour déploiement On-Premise
+│
+└── kubernetes/
+    ├── namespace.yaml
+    ├── backend/
+    │   ├── deployment.yaml
+    │   ├── service.yaml
+    │   └── hpa.yaml
+    ├── frontend/
+    │   ├── deployment.yaml
+    │   └── service.yaml
+    ├── postgres/
+    │   ├── statefulset.yaml
+    │   ├── service.yaml
+    │   └── pvc.yaml
+    ├── ingress/
+    │   └── ingress.yaml
+    └── config/
+        ├── backend-configmap.yaml
+        └── backend-secret.yaml
+</pre>
+
+<h3>5.1 — docker-compose.yml (développement)</h3>
+
+<pre>
+version: "3.9"
+
+services:
+
+  postgres:
+    image: timescale/timescaledb:latest-pg16
+    container_name: leo-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       leoone
+      POSTGRES_USER:     leoone
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/migrations:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U leoone -d leoone"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: leo-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      APP_ENV:        development
+      DATABASE_URL:   "postgres://leoone:${POSTGRES_PASSWORD}@postgres:5432/leoone?sslmode=disable"
+      JWT_SECRET:     ${JWT_SECRET}
+      CA_CERT_PATH:   /certs/ca.crt
+      CA_KEY_PATH:    /certs/ca.key
+      SERVER_ADDR:    "0.0.0.0:8080"
+      WS_AGENT_ADDR:  "0.0.0.0:8081"
+      LOG_LEVEL:      debug
+    volumes:
+      - ./infra/certs:/certs:ro
+    ports:
+      - "8080:8080"
+      - "8081:8081"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: development
+    container_name: leo-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      VITE_API_BASE_URL: "http://localhost:8080"
+      VITE_WS_URL:       "ws://localhost:8081"
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/public:/app/public
+    ports:
+      - "5173:5173"
+
+volumes:
+  postgres_data:
+</pre>
+
+<h3>5.2 — backend/Dockerfile</h3>
+
+<pre>
+# Stage 1 : Build
+FROM golang:1.23-alpine AS builder
+
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -ldflags="-s -w -X main.Version=${VERSION:-dev}" \
+    -o /leo-server ./cmd/server
+
+# Stage 2 : Image finale minimale (distroless)
+FROM gcr.io/distroless/static-debian12
+
+COPY --from=builder /leo-server /leo-server
+
+EXPOSE 8080 8081
+
+ENTRYPOINT ["/leo-server"]
+</pre>
+
+<h3>5.3 — frontend/Dockerfile</h3>
+
+<pre>
+# Stage development (hot reload Vite)
+FROM node:22-alpine AS development
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+EXPOSE 5173
+CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
+
+# Stage build production
+FROM node:22-alpine AS builder
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
+
+# Stage production (nginx statique)
+FROM nginx:1.27-alpine AS production
+COPY --from=builder /app/dist /usr/share/nginx/html
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+EXPOSE 80
+</pre>
+
+<h3>5.4 — agent/Dockerfile.builder (cross-compilation C)</h3>
+
+<pre>
+FROM debian:bookworm-slim
+
+RUN apt-get update &amp;&amp; apt-get install -y --no-install-recommends \
+    cmake ninja-build gcc g++ \
+    gcc-mingw-w64-x86-64 \
+    libssl-dev make \
+    &amp;&amp; rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+COPY . .
+
+# Build Linux x86_64
+RUN cmake -B build/linux-amd64 -G Ninja \
+      -DCMAKE_BUILD_TYPE=Release -DTARGET_OS=linux \
+    &amp;&amp; cmake --build build/linux-amd64
+
+# Build Windows x86_64 (cross-compilation)
+RUN cmake -B build/windows-amd64 -G Ninja \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/mingw-w64.cmake \
+      -DTARGET_OS=windows \
+    &amp;&amp; cmake --build build/windows-amd64
+</pre>
+
+<h3>5.5 — kubernetes/backend/deployment.yaml</h3>
+
+<pre>
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: leo-backend
+  namespace: leo-one
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: leo-backend
+  template:
+    metadata:
+      labels:
+        app: leo-backend
+    spec:
+      containers:
+        - name: backend
+          image: ghcr.io/yourorg/leo-backend:latest
+          ports:
+            - containerPort: 8080
+            - containerPort: 8081
+          envFrom:
+            - configMapRef:
+                name: backend-config
+            - secretRef:
+                name: backend-secret
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "1000m"
+              memory: "1Gi"
+</pre>
+
+<h3>5.6 — kubernetes/backend/hpa.yaml (Autoscaling)</h3>
+
+<pre>
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: leo-backend-hpa
+  namespace: leo-one
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: leo-backend
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+</pre>
+
+<h3>5.7 — kubernetes/ingress/ingress.yaml</h3>
+
+<pre>
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: leo-ingress
+  namespace: leo-one
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - rmm.yourdomain.com
+      secretName: leo-tls
+  rules:
+    - host: rmm.yourdomain.com
+      http:
+        paths:
+          - path: /ws/agent
+            pathType: Prefix
+            backend:
+              service:
+                name: leo-backend
+                port:
+                  number: 8081
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: leo-backend
+                port:
+                  number: 8080
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: leo-frontend
+                port:
+                  number: 80
+</pre>
+
+<!-- SECTION 6 -->
+<h2>6. Récapitulatif Phase 2</h2>
+
+<table>
+  <tr><th>Composant</th><th>Technologie</th><th>Port</th></tr>
+  <tr><td>Agent C</td><td>CMake, libwebsockets, cJSON, OpenSSL</td><td>—</td></tr>
+  <tr><td>Backend Go</td><td>Chi, pgx/v5, gorilla/websocket</td><td>8080 (REST), 8081 (WSS)</td></tr>
+  <tr><td>Frontend</td><td>Vite, React 18, Shadcn/ui, Zustand, React Query</td><td>5173 (dev), 80 (prod)</td></tr>
+  <tr><td>Base de données</td><td>PostgreSQL 16 + TimescaleDB</td><td>5432</td></tr>
+  <tr><td>Ingress (K8s)</td><td>NGINX Ingress + cert-manager (Let's Encrypt)</td><td>443</td></tr>
+</table>
+
+<br>
+<hr style="border-color:#1e3a5f; margin-top:40px;">
+<p style="text-align:center; color:#888; font-size:9pt;">Leo-One RMM — Document Phase 2 — Confidentiel</p>
+
+</body>
+</html>

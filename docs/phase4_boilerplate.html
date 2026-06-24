@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>Leo-One RMM — Phase 4 : Boilerplate Agent C &amp; Serveur Go</title>
+  <style>
+    body { font-family: Arial, sans-serif; font-size: 11pt; margin: 2.5cm; color: #1a1a1a; }
+    h1 { font-size: 20pt; color: #1e3a5f; border-bottom: 3px solid #1e3a5f; padding-bottom: 8px; }
+    h2 { font-size: 15pt; color: #1e3a5f; border-bottom: 1px solid #aac4e0; padding-bottom: 4px; margin-top: 32px; }
+    h3 { font-size: 12pt; color: #2c5f8a; margin-top: 20px; }
+    pre { font-family: "Courier New", monospace; font-size: 8pt; background: #f4f6f9; border: 1px solid #d0d7e2; padding: 10px; white-space: pre; margin: 10px 0; line-height: 1.4; }
+    table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 10pt; }
+    th { background: #1e3a5f; color: white; padding: 8px 12px; text-align: left; }
+    td { border: 1px solid #c8d5e2; padding: 7px 12px; }
+    tr:nth-child(even) td { background: #f0f5fb; }
+    .cover { text-align: center; padding: 40px 0 60px 0; }
+    .cover h1 { font-size: 26pt; border: none; }
+    .note { background: #fff8e1; border-left: 4px solid #f0a500; padding: 10px 14px; margin: 12px 0; font-size: 10pt; }
+    p { line-height: 1.6; }
+  </style>
+</head>
+<body>
+<div class="cover">
+  <h1>Leo-One RMM</h1>
+  <p style="font-size:15pt; color:#2c5f8a; font-weight:bold;">Alternative moderne à Action1, NinjaOne, ConnectWise Automate</p>
+  <hr style="width:60%; border-color:#1e3a5f; margin:20px auto;">
+  <p style="font-size:14pt; color:#444;">PHASE 4 — Boilerplate Agent C &amp; Serveur Go (Gestionnaire de Connexion)</p>
+  <p style="color:#666; font-size:10pt;">2 233 lignes de code de production écrites · 24 juin 2026</p>
+</div>
+<hr style="border-color:#1e3a5f; border-width:2px; margin-bottom:40px;">
+
+<h2>1. Fichiers créés — Agent C</h2>
+<table>
+  <tr><th>Fichier</th><th>Rôle</th><th>Points clés</th></tr>
+  <tr><td>include/leo_agent.h</td><td>Header global</td><td>Tous les types, constantes, enums du protocole</td></tr>
+  <tr><td>src/logger.c/h</td><td>Logger thread-safe</td><td>Mutex interne, rotation fichier, 5 niveaux</td></tr>
+  <tr><td>src/config.c/h</td><td>Configuration INI</td><td>Lecture/écriture agent.conf, validation</td></tr>
+  <tr><td>src/protocol.c/h</td><td>Protocole JSON</td><td>Sérialisation HELLO/HEARTBEAT/METRICS/CMD_RESULT</td></tr>
+  <tr><td>src/metrics.h</td><td>Interface métriques</td><td>API plateforme-agnostique (implémentée par platform/)</td></tr>
+  <tr><td>platform/linux/metrics_linux.c</td><td>Métriques Linux</td><td>/proc/stat (CPU diff), /proc/meminfo, /proc/net/dev</td></tr>
+  <tr><td>src/connection.c/h</td><td>Connexion WSS</td><td>libwebsockets, file thread-safe, backoff exponentiel</td></tr>
+  <tr><td>src/agent.c/h</td><td>Orchestrateur</td><td>Threads heartbeat + métriques, dispatch commandes</td></tr>
+  <tr><td>src/main.c</td><td>Point d'entrée</td><td>Signal SIGTERM/SIGINT, boucle d'attente</td></tr>
+  <tr><td>CMakeLists.txt</td><td>Build system</td><td>Cross-compilation Linux/Windows/macOS, flags sécurité</td></tr>
+</table>
+
+<h2>2. Fichiers créés — Backend Go</h2>
+<table>
+  <tr><th>Fichier</th><th>Rôle</th><th>Points clés</th></tr>
+  <tr><td>go.mod</td><td>Module Go</td><td>chi, gorilla/websocket, pgx/v5, golang-jwt</td></tr>
+  <tr><td>pkg/config/config.go</td><td>Configuration</td><td>12-factor app : 100% env vars, valeurs par défaut</td></tr>
+  <tr><td>pkg/logger/logger.go</td><td>Logger structuré</td><td>slog, JSON en prod / Text en dev, enrichissement contexte</td></tr>
+  <tr><td>internal/domain/agent/agent.go</td><td>Entité Agent</td><td>Types, statuts, interface Repository</td></tr>
+  <tr><td>internal/domain/metric/metric.go</td><td>Entité Metric</td><td>Types, Snapshot.ToPoints(), ChooseResolution()</td></tr>
+  <tr><td>internal/infrastructure/websocket/client.go</td><td>Client WSS</td><td>ReadPump + WritePump, ping/pong, batch write</td></tr>
+  <tr><td>internal/infrastructure/websocket/hub.go</td><td>Hub WSS</td><td>Registre thread-safe, reconnexion propre, SendToAgent</td></tr>
+  <tr><td>internal/infrastructure/websocket/dispatcher.go</td><td>Dispatcher</td><td>Routing HELLO/HEARTBEAT/METRICS/CMD_RESULT</td></tr>
+  <tr><td>internal/interfaces/ws/agent_ws_handler.go</td><td>Handler WS</td><td>Upgrade HTTP, extraction identité mTLS, mode dev</td></tr>
+  <tr><td>cmd/server/main.go</td><td>Bootstrap</td><td>DI manuelle, 2 serveurs (REST:8080 + WS:8081), graceful shutdown</td></tr>
+</table>
+
+<h2>3. Architecture de Communication Agent ↔ Serveur</h2>
+<pre>
+Agent C (daemon)                              Backend Go
+─────────────────────────────────────────────────────────────────────
+main.c
+  │
+  ├── leo_agent_start()
+  │     ├── leo_config_load()            ← agent.conf
+  │     ├── leo_metrics_init()           ← /proc/stat snapshot initial
+  │     ├── leo_conn_create()            ← lance _lws_thread
+  │     │     └── _lws_thread            ← boucle événementielle LWS
+  │     │           ├── lws_service()    ← EVENT LOOP
+  │     │           ├── ESTABLISHED → enqueue HELLO
+  │     │           ├── RECEIVE → _on_message() (dispatch commandes)
+  │     │           └── WRITEABLE → vide send_queue (mutex)
+  │     ├── _heartbeat_thread (30s)      → leo_conn_send(HEARTBEAT)
+  │     └── _metrics_thread (60s)        → leo_conn_send(METRICS)
+  │
+  └── Boucle SIGTERM → leo_agent_stop()
+
+                         │  WSS TLS 1.3 mTLS
+                         ▼
+cmd/server/main.go
+  ├── wsServer :8081
+  │     └── AgentWSHandler.ServeHTTP()
+  │           ├── extractIdentityFromCert()  ← CN=agent_id, OU=tenant_id
+  │           ├── upgrader.Upgrade()
+  │           ├── hub.Register(client)
+  │           ├── go client.WritePump()
+  │           └── client.ReadPump()          ← BLOQUANT jusqu'à déco.
+  │
+  ├── Hub (registre RWMutex)
+  │     ├── Register / Unregister
+  │     ├── SendToAgent(agentID, msg)
+  │     └── HandleIncoming() → Dispatcher.Dispatch()
+  │
+  └── Dispatcher
+        ├── HELLO      → agentRepo.UpdateStatus(online) + HELLO_ACK
+        ├── HEARTBEAT  → agentRepo.UpdateStatus(online, lastSeen)
+        ├── METRICS    → Snapshot.ToPoints() → metricRepo.InsertBatch()
+        └── CMD_RESULT → (commandes futures)
+</pre>
+
+<h2>4. Mesure CPU Linux — Méthode Différentielle</h2>
+<p>La mesure CPU via <code>/proc/stat</code> nécessite deux lectures séparées dans le temps.
+L'agent stocke le snapshot précédent dans un état statique et calcule la différence à chaque collecte :</p>
+<pre>
+usage (%) = (total_delta - idle_delta) / total_delta × 100
+
+où :
+  total_delta = Σ(user+nice+system+idle+iowait+irq+softirq+steal) entre t-1 et t
+  idle_delta  = (idle + iowait) entre t-1 et t
+</pre>
+<div class="note">
+  <strong>Premier appel :</strong> comme il n'y a pas de snapshot précédent au démarrage,
+  <code>leo_metrics_init()</code> effectue une première lecture de <code>/proc/stat</code>
+  pour initialiser l'état. La première collecte retournera des valeurs valides dès le premier appel à <code>leo_metrics_collect()</code>.
+</div>
+
+<h2>5. Thread-Safety de la File d'Envoi WSS</h2>
+<pre>
+Thread heartbeat / Thread métriques
+        │
+        ▼  leo_conn_send(data, len)
+┌───────────────────────────────────────────┐
+│  pthread_mutex_lock(&amp;queue_mutex)         │
+│  send_queue[queue_tail] = {data, len}     │
+│  queue_tail = (queue_tail+1) % DEPTH      │
+│  queue_count++                            │
+│  pthread_mutex_unlock(&amp;queue_mutex)       │
+│  lws_cancel_service(lws_ctx)  ← réveille │
+└───────────────────────────────────────────┘
+        │
+        ▼  Thread LWS (event loop)
+┌───────────────────────────────────────────────────┐
+│  LWS_CALLBACK_CLIENT_WRITEABLE                    │
+│    pthread_mutex_lock(&amp;queue_mutex)               │
+│    frame[LWS_PRE..] = send_queue[queue_head].data │
+│    lws_write(wsi, frame+LWS_PRE, len, TEXT)       │
+│    queue_head++; queue_count--                    │
+│    if queue_count &gt; 0: lws_callback_on_writable() │
+│    pthread_mutex_unlock(&amp;queue_mutex)             │
+└───────────────────────────────────────────────────┘
+</pre>
+
+<br>
+<hr style="border-color:#1e3a5f; margin-top:40px;">
+<p style="text-align:center; color:#888; font-size:9pt;">Leo-One RMM — Document Phase 4 — Confidentiel</p>
+</body>
+</html>
