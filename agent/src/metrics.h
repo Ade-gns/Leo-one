@@ -31,4 +31,16 @@ leo_error_t leo_metrics_collect(leo_metrics_t *out);
 /** Libère les ressources du sous-système de collecte. */
 void leo_metrics_destroy(void);
 
+/* ─── Utilitaires communs (src/metrics.c) ─────────────────────────────────── */
+
+/**
+ * Retourne true si le snapshot a été rempli (timestamp non nul).
+ */
+bool leo_metrics_is_valid(const leo_metrics_t *m);
+
+/**
+ * Écrit un résumé lisible du snapshot dans les logs (niveau DEBUG).
+ */
+void leo_metrics_log_summary(const leo_metrics_t *m);
+
 #endif /* LEO_METRICS_H */

@@ -21,9 +21,12 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/yourorg/leo-one/internal/infrastructure/persistence/postgres"
 	"github.com/yourorg/leo-one/internal/infrastructure/websocket"
-	wsHandler "github.com/yourorg/leo-one/internal/interfaces/ws"
 	chiRouter "github.com/yourorg/leo-one/internal/interfaces/http"
+	"github.com/yourorg/leo-one/internal/interfaces/http/handlers"
+	wsHandler "github.com/yourorg/leo-one/internal/interfaces/ws"
+	pkgauth "github.com/yourorg/leo-one/internal/pkg/auth"
 	"github.com/yourorg/leo-one/pkg/config"
 	"github.com/yourorg/leo-one/pkg/logger"
 )
@@ -34,6 +37,13 @@ func main() {
 	if err != nil {
 		slog.Error("Erreur de configuration", "error", err)
 		os.Exit(1)
+	}
+
+	// JWT_SECRET : lu directement depuis l'environnement (HS256)
+	jwtSecret := os.Getenv("JWT_SECRET")
+	if jwtSecret == "" {
+		jwtSecret = "leo-one-dev-secret-change-in-production"
+		slog.Warn("JWT_SECRET non défini — utilisation d'un secret de développement")
 	}
 
 	// ── Logger ─────────────────────────────────────────────────────────────
@@ -55,9 +65,9 @@ func main() {
 		log.Error("URL de base de données invalide", "error", err)
 		os.Exit(1)
 	}
-	poolCfg.MaxConns          = int32(cfg.DBMaxOpenConns)
-	poolCfg.MinConns          = int32(cfg.DBMaxIdleConns)
-	poolCfg.MaxConnLifetime   = cfg.DBConnMaxLifetime
+	poolCfg.MaxConns = int32(cfg.DBMaxOpenConns)
+	poolCfg.MinConns = int32(cfg.DBMaxIdleConns)
+	poolCfg.MaxConnLifetime = cfg.DBConnMaxLifetime
 
 	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {
@@ -76,23 +86,47 @@ func main() {
 	//
 	// Ordre d'initialisation :
 	//   repos (persistence) → dispatcher → hub → handlers → routers
-	//
-	// Note : les repos réels seront branchés ici après Phase 4.
-	// Pour ce bootstrap, on utilise des stubs NoOp qui permettent à la
-	// compilation et au démarrage de fonctionner immédiatement.
-	agentRepo  := newNoOpAgentRepo()
-	metricRepo := newNoOpMetricRepo()
 
+	// Repos
+	agentRepo  := postgres.NewAgentRepo(pool)
+	metricRepo := postgres.NewMetricRepo(pool)
+	tenantRepo := postgres.NewTenantRepo(pool)
+
+	// WebSocket
 	dispatcher := websocket.NewDispatcher(agentRepo, metricRepo, log)
 	hub         := websocket.NewHub(dispatcher, log)
 	dispatcher.SetHub(hub)
 
 	agentWSH := wsHandler.NewAgentWSHandler(hub, log)
 
+	// Auth
+	jwtVerifier := pkgauth.NewJWTVerifier(jwtSecret)
+
+	// Handlers
+	authHandler      := handlers.NewAuthHandler(pool, jwtVerifier, cfg.JWTAccessTTL, cfg.JWTRefreshTTL)
+	agentHandler     := handlers.NewAgentHandler(agentRepo, pool, hub)
+	metricHandler    := handlers.NewMetricHandler(metricRepo)
+	dashboardHandler := handlers.NewDashboardHandler(pool)
+	alertHandler     := handlers.NewAlertHandler()
+	stubHandler      := &handlers.StubHandler{}
+
 	// Routeur API REST (Chi)
 	deps := &chiRouter.Dependencies{
-		Logger: log,
-		// Les handlers seront branchés progressivement
+		AuthHandler:       authHandler,
+		AgentHandler:      agentHandler,
+		DashboardHandler:  dashboardHandler,
+		MetricHandler:     metricHandler,
+		InventoryHandler:  stubHandler,
+		AlertHandler:      alertHandler,
+		TicketHandler:     stubHandler,
+		WorkspaceHandler:  stubHandler,
+		UserHandler:       stubHandler,
+		RoleHandler:       stubHandler,
+		TenantHandler:     stubHandler,
+		EnrollmentHandler: stubHandler,
+		JWTVerifier:       jwtVerifier,
+		TenantRepo:        tenantRepo,
+		Logger:            log,
 	}
 	apiRouter := chiRouter.NewRouter(deps)
 
@@ -110,13 +144,13 @@ func main() {
 	wsMux.Handle("/ws/agent", agentWSH)
 	wsMux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"status":"ok"}`))
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
 
 	wsServer := &http.Server{
 		Addr:        cfg.WSAgentAddr,
 		Handler:     wsMux,
-		ReadTimeout: 0,   // pas de timeout de lecture pour les connexions WS longues
+		ReadTimeout: 0,  // pas de timeout de lecture pour les connexions WS longues
 		IdleTimeout: 0,
 	}
 
@@ -157,21 +191,3 @@ func main() {
 
 	log.Info("Serveur arrêté proprement")
 }
-
-// ─── Stubs NoOp (à remplacer par les vraies implémentations pgx) ─────────────
-
-// Ces stubs permettent au serveur de compiler et démarrer dès Phase 4
-// sans attendre les implémentations de persistance (Phase suivante).
-
-func newNoOpAgentRepo() noOpAgentRepo  { return noOpAgentRepo{} }
-func newNoOpMetricRepo() noOpMetricRepo { return noOpMetricRepo{} }
-
-type noOpAgentRepo  struct{}
-type noOpMetricRepo struct{}
-
-// Implémente agentDomain.Repository (méthodes vides — retournent nil)
-func (noOpAgentRepo) FindByID(ctx context.Context, tenantID, agentID string) (any, error) { return nil, nil }
-func (noOpAgentRepo) UpdateStatus(ctx context.Context, agentID string, status any, lastSeen any) error { return nil }
-
-// Implémente metricDomain.Repository (méthode vide — retourne nil)
-func (noOpMetricRepo) InsertBatch(ctx context.Context, points any) error { return nil }

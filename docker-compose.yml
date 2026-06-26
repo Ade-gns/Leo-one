@@ -1,0 +1,97 @@
+version: "3.9"
+
+# Leo-One RMM — environnement de développement local
+#
+# Usage rapide :
+#   docker compose up -d postgres          # DB seule (mode dev habituel)
+#   docker compose --profile full up -d   # DB + Backend + Frontend
+#   ./scripts/dev.sh                       # Helper interactif
+
+services:
+
+  # ─────────────────────────────────────────────────────────────
+  # PostgreSQL 16 + TimescaleDB
+  # ─────────────────────────────────────────────────────────────
+  postgres:
+    image: timescale/timescaledb:latest-pg16
+    container_name: leo-one-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: leo_one
+      POSTGRES_USER: leo
+      POSTGRES_PASSWORD: leo_dev
+    ports:
+      - "5432:5432"
+    volumes:
+      # Persistance des données
+      - postgres_data:/var/lib/postgresql/data
+      # Scripts d'initialisation (extensions + migrations)
+      # Exécutés dans l'ordre alphabétique au premier démarrage
+      - ./infra/docker/postgres:/docker-entrypoint-initdb.d:ro
+      # Migrations montées pour que le script 02 puisse les lire
+      - ./backend/migrations:/migrations:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U leo -d leo_one"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    networks:
+      - leo-one
+
+  # ─────────────────────────────────────────────────────────────
+  # Backend Go — profile "full" (optionnel en dev)
+  # En développement, préférer : ./scripts/dev.sh backend
+  # ─────────────────────────────────────────────────────────────
+  backend:
+    profiles: ["full"]
+    build:
+      context: ./backend
+      dockerfile: ../infra/docker/backend.Dockerfile
+    container_name: leo-one-backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # En Docker, postgres est accessible via le nom de service
+      DATABASE_URL: postgres://leo:leo_dev@postgres:5432/leo_one?sslmode=disable
+    ports:
+      - "8080:8080"
+      - "8081:8081"
+    volumes:
+      # Bind mount pour accéder aux migrations depuis le container
+      - ./backend/migrations:/app/migrations:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - leo-one
+
+  # ─────────────────────────────────────────────────────────────
+  # Frontend React/Vite — profile "full" (optionnel en dev)
+  # En développement, préférer : ./scripts/dev.sh frontend
+  # ─────────────────────────────────────────────────────────────
+  frontend:
+    profiles: ["full"]
+    build:
+      context: ./frontend
+      dockerfile: ../infra/docker/frontend.Dockerfile
+    container_name: leo-one-frontend
+    restart: unless-stopped
+    environment:
+      # Le proxy Vite (/api) pointe vers le service backend Docker
+      VITE_API_BASE_URL: http://backend:8080
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+    networks:
+      - leo-one
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  leo-one:
+    driver: bridge
