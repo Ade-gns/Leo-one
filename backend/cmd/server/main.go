@@ -77,10 +77,15 @@ func main() {
 	defer pool.Close()
 
 	if err := pool.Ping(ctx); err != nil {
-		log.Error("PostgreSQL inaccessible", "error", err)
-		os.Exit(1)
+		if cfg.IsDevelopment() {
+			log.Warn("PostgreSQL inaccessible — démarrage en mode dégradé (dev uniquement)", "error", err)
+		} else {
+			log.Error("PostgreSQL inaccessible", "error", err)
+			os.Exit(1)
+		}
+	} else {
+		log.Info("PostgreSQL connecté", "url_host", poolCfg.ConnConfig.Host)
 	}
-	log.Info("PostgreSQL connecté", "url_host", poolCfg.ConnConfig.Host)
 
 	// ── Injection de dépendances ────────────────────────────────────────────
 	//
