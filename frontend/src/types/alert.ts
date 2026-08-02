@@ -1,21 +1,30 @@
 import type { MetricType } from './metric'
 
-export type AlertSeverity = 'critical' | 'high' | 'medium' | 'low' | 'info'
-export type AlertStatus   = 'firing' | 'acknowledged' | 'resolved'
+export type AlertSeverity = 'info' | 'warning' | 'critical'
+export type AlertStatus   = 'open' | 'acknowledged' | 'resolved'
 
 export interface Alert {
   id:               string
   tenant_id:        string
   agent_id:         string
+  agent_hostname:   string
   rule_id?:         string
   severity:         AlertSeverity
   status:           AlertStatus
-  message:          string
+  title:            string
+  description?:     string
+  metric_value?:    number
   triggered_at:     string
   acknowledged_at?: string
   acknowledged_by?: string
   resolved_at?:     string
   created_at:       string
+}
+
+export interface AlertListFilter {
+  status?:   AlertStatus
+  severity?: AlertSeverity
+  agent_id?: string
 }
 
 export interface AlertRule {
