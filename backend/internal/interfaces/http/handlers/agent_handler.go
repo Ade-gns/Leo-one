@@ -115,12 +115,12 @@ func (h *AgentHandler) Get(w http.ResponseWriter, r *http.Request) {
 	agentID := chi.URLParam(r, "agentID")
 
 	agent, err := h.agentRepo.FindByID(r.Context(), tenantID, agentID)
-	if errors.Is(err, pgx.ErrNoRows) || agent == nil {
-		response.Error(w, http.StatusNotFound, "NOT_FOUND", "agent introuvable")
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		response.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "erreur de base de données")
 		return
 	}
-	if err != nil {
-		response.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "erreur de base de données")
+	if agent == nil {
+		response.Error(w, http.StatusNotFound, "NOT_FOUND", "agent introuvable")
 		return
 	}
 
@@ -135,12 +135,12 @@ func (h *AgentHandler) Update(w http.ResponseWriter, r *http.Request) {
 	agentID := chi.URLParam(r, "agentID")
 
 	agent, err := h.agentRepo.FindByID(r.Context(), tenantID, agentID)
-	if errors.Is(err, pgx.ErrNoRows) || agent == nil {
-		response.Error(w, http.StatusNotFound, "NOT_FOUND", "agent introuvable")
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		response.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "erreur de base de données")
 		return
 	}
-	if err != nil {
-		response.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "erreur de base de données")
+	if agent == nil {
+		response.Error(w, http.StatusNotFound, "NOT_FOUND", "agent introuvable")
 		return
 	}
 
@@ -302,12 +302,12 @@ func (h *AgentHandler) CreateCommand(w http.ResponseWriter, r *http.Request) {
 
 	// Vérifier que l'agent appartient au tenant
 	agent, err := h.agentRepo.FindByID(r.Context(), tenantID, agentID)
-	if errors.Is(err, pgx.ErrNoRows) || agent == nil {
-		response.Error(w, http.StatusNotFound, "NOT_FOUND", "agent introuvable")
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		response.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "erreur de base de données")
 		return
 	}
-	if err != nil {
-		response.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "erreur de base de données")
+	if agent == nil {
+		response.Error(w, http.StatusNotFound, "NOT_FOUND", "agent introuvable")
 		return
 	}
 
