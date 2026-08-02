@@ -96,6 +96,7 @@ func main() {
 	agentRepo  := postgres.NewAgentRepo(pool)
 	metricRepo := postgres.NewMetricRepo(pool)
 	tenantRepo := postgres.NewTenantRepo(pool)
+	alertRepo  := postgres.NewAlertRepo(pool)
 
 	// WebSocket
 	dispatcher := websocket.NewDispatcher(agentRepo, metricRepo, log)
@@ -112,7 +113,7 @@ func main() {
 	agentHandler     := handlers.NewAgentHandler(agentRepo, pool, hub)
 	metricHandler    := handlers.NewMetricHandler(metricRepo)
 	dashboardHandler := handlers.NewDashboardHandler(pool)
-	alertHandler     := handlers.NewAlertHandler()
+	alertHandler     := handlers.NewAlertHandler(alertRepo)
 	stubHandler      := &handlers.StubHandler{}
 
 	// Routeur API REST (Chi)

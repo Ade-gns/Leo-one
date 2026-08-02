@@ -5,6 +5,7 @@ import (
 	"time"
 
 	agentDomain "github.com/yourorg/leo-one/internal/domain/agent"
+	alertDomain "github.com/yourorg/leo-one/internal/domain/alert"
 	metricDomain "github.com/yourorg/leo-one/internal/domain/metric"
 )
 
@@ -109,3 +110,34 @@ func (m *mockMetricRepo) Latest(ctx context.Context, tenantID, agentID string) (
 }
 
 var _ metricDomain.Repository = (*mockMetricRepo)(nil)
+
+// ─── mockAlertRepo ──────────────────────────────────────────────────────────
+
+type mockAlertRepo struct {
+	listFunc        func(ctx context.Context, tenantID string, filter alertDomain.ListFilter) ([]*alertDomain.Alert, string, error)
+	findByIDFunc    func(ctx context.Context, tenantID, alertID string) (*alertDomain.Alert, error)
+	acknowledgeFunc func(ctx context.Context, tenantID, alertID, userID string) (*alertDomain.Alert, error)
+}
+
+func (m *mockAlertRepo) List(ctx context.Context, tenantID string, filter alertDomain.ListFilter) ([]*alertDomain.Alert, string, error) {
+	if m.listFunc != nil {
+		return m.listFunc(ctx, tenantID, filter)
+	}
+	return nil, "", nil
+}
+
+func (m *mockAlertRepo) FindByID(ctx context.Context, tenantID, alertID string) (*alertDomain.Alert, error) {
+	if m.findByIDFunc != nil {
+		return m.findByIDFunc(ctx, tenantID, alertID)
+	}
+	return nil, nil
+}
+
+func (m *mockAlertRepo) Acknowledge(ctx context.Context, tenantID, alertID, userID string) (*alertDomain.Alert, error) {
+	if m.acknowledgeFunc != nil {
+		return m.acknowledgeFunc(ctx, tenantID, alertID, userID)
+	}
+	return nil, nil
+}
+
+var _ alertDomain.Repository = (*mockAlertRepo)(nil)
