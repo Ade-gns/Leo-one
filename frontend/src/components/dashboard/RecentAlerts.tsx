@@ -4,27 +4,19 @@
 import { AlertTriangle, AlertCircle, Info, CheckCircle } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 import { fr } from 'date-fns/locale'
-import { useQuery } from '@tanstack/react-query'
-import { get } from '@/api/client'
-import type { ApiResponse } from '@/types/api'
-import type { Alert, AlertSeverity } from '@/types/alert'
+import { useAlerts } from '@/hooks/useAlerts'
+import type { AlertSeverity } from '@/types/alert'
 
 const SEVERITY_CONFIG: Record<AlertSeverity, { icon: React.ElementType; color: string }> = {
   critical: { icon: AlertCircle,   color: 'text-red-500'    },
-  high:     { icon: AlertTriangle, color: 'text-orange-500' },
-  medium:   { icon: AlertTriangle, color: 'text-yellow-500' },
-  low:      { icon: Info,          color: 'text-blue-500'   },
-  info:     { icon: CheckCircle,   color: 'text-gray-400'   },
+  warning:  { icon: AlertTriangle, color: 'text-yellow-500' },
+  info:     { icon: Info,          color: 'text-blue-500'   },
 }
 
 export function RecentAlerts() {
-  const { data, isLoading } = useQuery({
-    queryKey: ['alerts', 'recent'],
-    queryFn:  () => get<ApiResponse<Alert[]>>('/alerts?limit=5&status=firing'),
-    refetchInterval: 30_000,
-  })
+  const { data, isLoading } = useAlerts({ status: 'open' })
 
-  const alerts = data?.data ?? []
+  const alerts = (data?.data ?? []).slice(0, 5)
 
   if (isLoading) {
     return (
@@ -57,7 +49,7 @@ export function RecentAlerts() {
           >
             <Icon className={`h-5 w-5 mt-0.5 shrink-0 ${cfg.color}`} />
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-gray-800 truncate">{alert.message}</p>
+              <p className="text-sm font-medium text-gray-800 truncate">{alert.title}</p>
               <p className="text-xs text-gray-400 mt-0.5">
                 {formatDistanceToNow(new Date(alert.triggered_at), { addSuffix: true, locale: fr })}
               </p>
