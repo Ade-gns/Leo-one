@@ -11,6 +11,7 @@ const LoginPage      = lazy(() => import('@/pages/LoginPage'))
 const DashboardPage  = lazy(() => import('@/pages/DashboardPage'))
 const AgentsPage     = lazy(() => import('@/pages/AgentsPage'))
 const AgentDetailPage = lazy(() => import('@/pages/AgentDetailPage'))
+const AlertsPage     = lazy(() => import('@/pages/AlertsPage'))
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -51,6 +52,7 @@ export default function App() {
               <Route index                      element={<DashboardPage />}   />
               <Route path="agents"              element={<AgentsPage />}      />
               <Route path="agents/:agentId"     element={<AgentDetailPage />} />
+              <Route path="alerts"              element={<AlertsPage />}      />
               {/* Routes futures */}
               <Route path="*"                   element={<Navigate to="/" replace />} />
             </Route>
