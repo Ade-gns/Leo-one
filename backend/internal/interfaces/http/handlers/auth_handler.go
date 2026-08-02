@@ -86,7 +86,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		       EXISTS(
 		         SELECT 1 FROM user_roles ur
 		         JOIN roles ro ON ro.id = ur.role_id
-		         WHERE ur.user_id = u.id AND ro.name = 'admin' AND ro.is_system = true
+		         WHERE ur.user_id = u.id AND ro.name = 'Admin' AND ro.is_system = true
 		       ) AS is_admin
 		FROM users u
 		WHERE u.email = $1
@@ -183,7 +183,7 @@ func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 		SELECT EXISTS(
 		  SELECT 1 FROM user_roles ur
 		  JOIN roles ro ON ro.id = ur.role_id
-		  WHERE ur.user_id = u.id AND ro.name = 'admin' AND ro.is_system = true
+		  WHERE ur.user_id = u.id AND ro.name = 'Admin' AND ro.is_system = true
 		)
 		FROM users u WHERE u.id = $1 AND u.is_active = true
 	`, userID).Scan(&isAdmin)
