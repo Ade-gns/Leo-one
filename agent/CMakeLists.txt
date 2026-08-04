@@ -6,6 +6,10 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
 
+# CMAKE_C_EXTENSIONS OFF passe -std=c11 (pas -std=gnu11) : glibc masque alors
+# nanosleep/sigaction/clock_gettime/popen/strcasecmp/... sans ceci.
+add_definitions(-D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE)
+
 # ─── Options de build ────────────────────────────────────────────────────────
 option(TARGET_OS "Système cible (linux|windows|macos)" "linux")
 
