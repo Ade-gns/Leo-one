@@ -133,6 +133,38 @@ static void _bytes_to_hex(const unsigned char *bytes, size_t len, char *hex_out)
     hex_out[len * 2] = '\0';
 }
 
+/**
+ * Calcule le SHA-256 du DER d'un certificat X509 déjà parsé, en hexadécimal.
+ * @param cert     Certificat (non libéré ici — reste à la charge de l'appelant)
+ * @param out_hex  Buffer de sortie, doit faire au moins 65 octets
+ * @return true si succès, false en cas d'erreur OpenSSL
+ */
+static bool _x509_sha256_hex(X509 *cert, char out_hex[65]) {
+    unsigned char *der_buf = NULL;
+    int der_len = i2d_X509(cert, &der_buf);
+    if (der_len <= 0 || !der_buf) {
+        LOG_ERROR("i2d_X509 échoué : impossible d'exporter en DER");
+        ERR_clear_error();
+        return false;
+    }
+
+    unsigned char digest[EVP_MAX_MD_SIZE];
+    unsigned int  digest_len = 0;
+    int ok = EVP_Digest(der_buf, (size_t)der_len,
+                        digest, &digest_len,
+                        EVP_sha256(), NULL);
+    OPENSSL_free(der_buf);
+
+    if (!ok) {
+        LOG_ERROR("EVP_Digest (SHA-256) échoué");
+        ERR_clear_error();
+        return false;
+    }
+
+    _bytes_to_hex(digest, digest_len, out_hex);
+    return true;
+}
+
 /* ─── API publique ───────────────────────────────────────────────────────── */
 
 leo_error_t leo_crypto_load_cert_key(char *cert_pem_out, size_t cert_sz,
@@ -212,35 +244,12 @@ leo_error_t leo_crypto_verify_ca_fingerprint(const char *ca_cert_pem,
         return LEO_ERR_TLS;
     }
 
-    /* Exporter le certificat en DER (format binaire canonique) */
-    unsigned char *der_buf = NULL;
-    int der_len = i2d_X509(cert, &der_buf);
+    /* Calculer le SHA-256 du DER */
+    char computed_fp[65];
+    bool computed = _x509_sha256_hex(cert, computed_fp);
     X509_free(cert);
 
-    if (der_len <= 0 || !der_buf) {
-        LOG_ERROR("i2d_X509 échoué : impossible d'exporter en DER");
-        ERR_clear_error();
-        return LEO_ERR_TLS;
-    }
-
-    /* Calculer le SHA-256 du DER */
-    unsigned char digest[EVP_MAX_MD_SIZE];
-    unsigned int  digest_len = 0;
-
-    int ok = EVP_Digest(der_buf, (size_t)der_len,
-                        digest, &digest_len,
-                        EVP_sha256(), NULL);
-    OPENSSL_free(der_buf);
-
-    if (!ok) {
-        LOG_ERROR("EVP_Digest (SHA-256) échoué");
-        ERR_clear_error();
-        return LEO_ERR_TLS;
-    }
-
-    /* Convertir en hexadécimal */
-    char computed_fp[65];
-    _bytes_to_hex(digest, digest_len, computed_fp);
+    if (!computed) return LEO_ERR_TLS;
 
     LOG_DEBUG("Empreinte CA calculée  : %s", computed_fp);
     LOG_DEBUG("Empreinte CA attendue  : %s", expected_fp);
@@ -253,4 +262,19 @@ leo_error_t leo_crypto_verify_ca_fingerprint(const char *ca_cert_pem,
 
     LOG_INFO("Empreinte CA vérifiée avec succès");
     return LEO_OK;
+}
+
+bool leo_crypto_x509_fingerprint_matches(X509 *cert, const char *expected_fp) {
+    if (!cert || !expected_fp) return false;
+
+    if (strlen(expected_fp) != 64) {
+        LOG_ERROR("Empreinte attendue invalide : longueur %zu (attendu 64)",
+                  strlen(expected_fp));
+        return false;
+    }
+
+    char computed_fp[65];
+    if (!_x509_sha256_hex(cert, computed_fp)) return false;
+
+    return strcasecmp(computed_fp, expected_fp) == 0;
 }

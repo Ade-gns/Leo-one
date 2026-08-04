@@ -20,8 +20,11 @@
  */
 #include "connection.h"
 #include "logger.h"
+#include "crypto.h"
 
 #include <libwebsockets.h>
+#include <openssl/x509.h>
+#include <openssl/x509_vfy.h>
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
@@ -140,6 +143,30 @@ static int _lws_callback(struct lws *wsi, enum lws_callback_reasons reason,
         }
         break;
 
+    case LWS_CALLBACK_OPENSSL_PERFORM_SERVER_CERT_VERIFICATION: {
+        /* Pinning strict : on ignore la validation de chaîne OpenSSL
+         * (preverify_ok, dans `len`) et on n'accepte que si le certificat
+         * présenté correspond exactement à l'empreinte SHA-256 épinglée
+         * dans la config. C'est la vérification serveur — indispensable,
+         * sinon n'importe quel serveur (attaquant MITM inclus) est accepté. */
+        X509_STORE_CTX *store_ctx  = (X509_STORE_CTX *)user;
+        X509           *peer_cert  = store_ctx ? X509_STORE_CTX_get_current_cert(store_ctx) : NULL;
+        const char     *expected_fp = conn->config ? conn->config->ca_fingerprint : NULL;
+
+        if (peer_cert && expected_fp &&
+            leo_crypto_x509_fingerprint_matches(peer_cert, expected_fp)) {
+            /* Empreinte épinglée validée : on force le statut OK même si
+             * OpenSSL a signalé une erreur de chaîne (cert auto-signé /
+             * CA inconnue — attendu, on ne fait pas confiance à une
+             * chaîne mais à une empreinte précise). */
+            X509_STORE_CTX_set_error(store_ctx, X509_V_OK);
+            return 0;
+        }
+
+        LOG_ERROR("Certificat serveur rejeté — empreinte non épinglée (pinning échoué)");
+        return 1;
+    }
+
     default:
         break;
     }
@@ -154,7 +181,7 @@ static struct lws_protocols g_protocols[] = {
         .per_session_data_size = 0,
         .rx_buffer_size        = LEO_MAX_MSG_SIZE,
     },
-    { NULL, NULL, 0, 0 }  /* terminateur */
+    { 0 }  /* terminateur */
 };
 
 /* ─── Thread de la boucle événementielle LWS ────────────────────────────── */
@@ -174,8 +201,9 @@ static void *_lws_thread(void *arg) {
         /* Certificat client (mTLS) */
         ctx_info.client_ssl_cert_filepath       = LEO_CLIENT_CERT_FILE;
         ctx_info.client_ssl_private_key_filepath = LEO_CLIENT_KEY_FILE;
-        /* CA pour vérification du serveur */
-        ctx_info.client_ssl_ca_filepath = LEO_CLIENT_CERT_FILE; /* override via pinning ci-dessous */
+        /* Pas de client_ssl_ca_filepath : on ne valide pas une chaîne de
+         * confiance mais l'empreinte exacte du certificat serveur, dans
+         * LWS_CALLBACK_OPENSSL_PERFORM_SERVER_CERT_VERIFICATION ci-dessous. */
 
         conn->lws_ctx = lws_create_context(&ctx_info);
         if (!conn->lws_ctx) {
@@ -192,8 +220,10 @@ static void *_lws_thread(void *arg) {
         ci.host           = conn->host;
         ci.origin         = conn->host;
         ci.protocol       = g_protocols[0].name;
-        ci.ssl_connection = LCCSCF_USE_SSL
-                          | LCCSCF_ALLOW_SELFSIGNED;  /* en prod : valider le CA interne */
+        /* Pas de LCCSCF_ALLOW_SELFSIGNED : le pinning strict dans
+         * LWS_CALLBACK_OPENSSL_PERFORM_SERVER_CERT_VERIFICATION est la
+         * seule autorité de validation du certificat serveur. */
+        ci.ssl_connection = LCCSCF_USE_SSL;
 
         struct lws *wsi = lws_client_connect_via_info(&ci);
         if (!wsi) {
@@ -364,11 +394,18 @@ void leo_conn_destroy(leo_conn_t *conn) {
     /* Réveille la boucle pour qu'elle teste should_stop */
     if (conn->lws_ctx) lws_cancel_service(conn->lws_ctx);
 
-    /* Attendre le thread (max 5s) */
+    /* Attendre le thread (max 5s). Si le thread ne répond pas (ex: bloqué
+     * dans une résolution DNS), on NE détruit PAS le mutex ni ne libère
+     * conn : le thread continuerait à y accéder après coup (use-after-free).
+     * On accepte une fuite plutôt qu'un crash / UB dans ce cas rare. */
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
     ts.tv_sec += 5;
-    pthread_timedjoin_np(conn->thread, NULL, &ts);
+    if (pthread_timedjoin_np(conn->thread, NULL, &ts) != 0) {
+        LOG_ERROR("Thread WSS non joignable après 5s — abandon (fuite volontaire, "
+                  "évite un use-after-free si le thread est encore actif)");
+        return;
+    }
 
     pthread_mutex_destroy(&conn->queue_mutex);
 

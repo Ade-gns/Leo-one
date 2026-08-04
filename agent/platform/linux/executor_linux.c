@@ -25,7 +25,9 @@
 #include <fcntl.h>
 #include <signal.h>
 #include <errno.h>
+#include <time.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <sys/select.h>
 
@@ -130,8 +132,8 @@ leo_error_t leo_exec_script(const char *interpreter,
     close(script_fd);  /* L'enfant ouvrira le fichier via son chemin */
 
     /* Créer les deux pipes : [0]=lecture parent, [1]=écriture enfant */
-    int stdout_pipe[2];
-    int stderr_pipe[2];
+    int stdout_pipe[2] = { -1, -1 };
+    int stderr_pipe[2] = { -1, -1 };
     if (pipe(stdout_pipe) != 0 || pipe(stderr_pipe) != 0) {
         LOG_ERROR("pipe() échoué : %s", strerror(errno));
         unlink(tmppath);
@@ -191,6 +193,18 @@ leo_error_t leo_exec_script(const char *interpreter,
     int    child_done = 0;
     leo_error_t ret   = LEO_OK;
 
+    /* Deadline absolue : select() est réarmé à chaque itération (dès qu'il y a
+     * de la sortie à lire), donc réutiliser timeout_secs comme durée FIXE à
+     * chaque tour ne borne que le temps d'INACTIVITÉ entre deux lectures, pas
+     * la durée totale — un script qui imprime périodiquement ne serait jamais
+     * tué. On calcule donc le temps restant jusqu'à une échéance absolue. */
+    struct timespec deadline = {0};
+    bool has_deadline = (timeout_secs > 0);
+    if (has_deadline) {
+        clock_gettime(CLOCK_MONOTONIC, &deadline);
+        deadline.tv_sec += timeout_secs;
+    }
+
     /* Boucle de lecture avec select() et timeout */
     while (!child_done) {
         fd_set rfds;
@@ -201,9 +215,21 @@ leo_error_t leo_exec_script(const char *interpreter,
 
         struct timeval tv;
         struct timeval *tvp = NULL;
-        if (timeout_secs > 0) {
-            tv.tv_sec  = (long)timeout_secs;
-            tv.tv_usec = 0;
+        if (has_deadline) {
+            struct timespec now;
+            clock_gettime(CLOCK_MONOTONIC, &now);
+
+            long remain_ms = (long)(deadline.tv_sec  - now.tv_sec)  * 1000
+                            + (long)(deadline.tv_nsec - now.tv_nsec) / 1000000;
+            if (remain_ms <= 0) {
+                LOG_WARN("Timeout d'exécution du script (%ds) — SIGKILL PID %d",
+                         timeout_secs, (int)child);
+                kill(child, SIGKILL);
+                ret = LEO_ERR_TIMEOUT;
+                break;
+            }
+            tv.tv_sec  = remain_ms / 1000;
+            tv.tv_usec = (remain_ms % 1000) * 1000;
             tvp = &tv;
         }
 

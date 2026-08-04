@@ -23,7 +23,6 @@ static uint64_t _now_ms(void) {
  * En production, remplacer par un générateur cryptographique (getrandom, BCryptGenRandom).
  */
 static void _gen_uuid(char *out, size_t sz) {
-    static const char hex[] = "0123456789abcdef";
     unsigned char rnd[16];
 
     /* Lecture de /dev/urandom — disponible sur Linux/macOS */

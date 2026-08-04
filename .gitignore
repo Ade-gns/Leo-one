@@ -1,0 +1,14 @@
+# Environnement local (secrets de dev, jamais à committer)
+.env
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Backend
+backend/leo-one
+backend/*.exe
+
+# Agent C — répertoires de build CMake
+agent/build/
+agent/build-*/

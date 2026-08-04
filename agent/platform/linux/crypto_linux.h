@@ -8,6 +8,7 @@
 #define LEO_CRYPTO_LINUX_H
 
 #include "../../include/leo_agent.h"
+#include "../../src/crypto.h"   /* déclare leo_crypto_x509_fingerprint_matches */
 
 #define LEO_CERT_BUF_SIZE  8192
 #define LEO_KEY_BUF_SIZE   8192
