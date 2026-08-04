@@ -27,7 +27,8 @@ export interface Permission {
 
 /** Données de la session utilisateur connecté (stockées dans le store Zustand) */
 export interface AuthSession {
-  user:         User
-  access_token: string
-  expires_at:   number  // epoch ms
+  user:          User
+  access_token:  string
+  refresh_token: string
+  expires_at:    number  // epoch ms
 }

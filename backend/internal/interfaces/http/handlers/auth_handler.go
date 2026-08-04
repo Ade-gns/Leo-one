@@ -75,14 +75,20 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	type userRow struct {
 		ID           string
 		TenantID     string
+		Email        string
+		FullName     string
 		PasswordHash string
 		IsActive     bool
+		MFAEnabled   bool
+		CreatedAt    time.Time
+		UpdatedAt    time.Time
 		IsAdmin      bool
 	}
 
 	var u userRow
 	err := h.pool.QueryRow(r.Context(), `
-		SELECT u.id, u.tenant_id, u.password_hash, u.is_active,
+		SELECT u.id, u.tenant_id, u.email, u.full_name, u.password_hash, u.is_active,
+		       u.mfa_enabled, u.created_at, u.updated_at,
 		       EXISTS(
 		         SELECT 1 FROM user_roles ur
 		         JOIN roles ro ON ro.id = ur.role_id
@@ -90,7 +96,8 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		       ) AS is_admin
 		FROM users u
 		WHERE u.email = $1
-	`, req.Email).Scan(&u.ID, &u.TenantID, &u.PasswordHash, &u.IsActive, &u.IsAdmin)
+	`, req.Email).Scan(&u.ID, &u.TenantID, &u.Email, &u.FullName, &u.PasswordHash, &u.IsActive,
+		&u.MFAEnabled, &u.CreatedAt, &u.UpdatedAt, &u.IsAdmin)
 
 	if errors.Is(err, pgx.ErrNoRows) {
 		response.Error(w, http.StatusUnauthorized, "UNAUTHORIZED", "email ou mot de passe invalide")
@@ -149,6 +156,16 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		"access_token":  accessToken,
 		"refresh_token": refreshToken,
 		"expires_in":    int(h.accessTTL.Seconds()),
+		"user": map[string]any{
+			"id":          u.ID,
+			"tenant_id":   u.TenantID,
+			"email":       u.Email,
+			"full_name":   u.FullName,
+			"is_active":   u.IsActive,
+			"mfa_enabled": u.MFAEnabled,
+			"created_at":  u.CreatedAt,
+			"updated_at":  u.UpdatedAt,
+		},
 	})
 }
 

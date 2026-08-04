@@ -41,7 +41,7 @@ export const useAuthStore = create<AuthState>()(
           const res = await fetch('/api/v1/auth/refresh', {
             method:  'POST',
             headers: { 'Content-Type': 'application/json' },
-            body:    JSON.stringify({ refresh_token: session.access_token }),
+            body:    JSON.stringify({ refresh_token: session.refresh_token }),
           })
 
           if (!res.ok) {
