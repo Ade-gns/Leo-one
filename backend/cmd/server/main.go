@@ -99,7 +99,7 @@ func main() {
 	alertRepo  := postgres.NewAlertRepo(pool)
 
 	// WebSocket
-	dispatcher := websocket.NewDispatcher(agentRepo, metricRepo, log)
+	dispatcher := websocket.NewDispatcher(agentRepo, metricRepo, pool, log)
 	hub         := websocket.NewHub(dispatcher, log)
 	dispatcher.SetHub(hub)
 

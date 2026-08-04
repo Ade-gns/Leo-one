@@ -1,9 +1,12 @@
 package websocket
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	agentDomain  "github.com/yourorg/leo-one/internal/domain/agent"
 	metricDomain "github.com/yourorg/leo-one/internal/domain/metric"
@@ -65,7 +68,8 @@ type cmdResultBody struct {
 type Dispatcher struct {
 	agentRepo  agentDomain.Repository
 	metricRepo metricDomain.Repository
-	hub        *Hub   // référence arrière pour envoyer HELLO_ACK, etc.
+	pool       *pgxpool.Pool // accès direct pour la table commands (pas de repo dédié)
+	hub        *Hub          // référence arrière pour envoyer HELLO_ACK, etc.
 	logger     *slog.Logger
 }
 
@@ -73,11 +77,13 @@ type Dispatcher struct {
 func NewDispatcher(
 	agentRepo  agentDomain.Repository,
 	metricRepo metricDomain.Repository,
+	pool       *pgxpool.Pool,
 	logger     *slog.Logger,
 ) *Dispatcher {
 	return &Dispatcher{
 		agentRepo:  agentRepo,
 		metricRepo: metricRepo,
+		pool:       pool,
 		logger:     logger,
 	}
 }
@@ -224,5 +230,23 @@ func (d *Dispatcher) handleCmdResult(client *Client, env envelope, log *slog.Log
 		"command_id", body.CommandID,
 		"exit_code", body.ExitCode)
 
-	// TODO : mise à jour du statut de la commande en BDD (Phase suivante)
+	if body.CommandID == "" {
+		log.Warn("CMD_RESULT sans command_id — ignoré")
+		return
+	}
+
+	status := "success"
+	if body.ExitCode != 0 {
+		status = "failed"
+	}
+
+	_, err := d.pool.Exec(context.Background(), `
+		UPDATE commands
+		SET status = $1::command_status, exit_code = $2, stdout = $3, stderr = $4,
+		    completed_at = NOW()
+		WHERE id = $5 AND tenant_id = $6
+	`, status, body.ExitCode, body.Stdout, body.Stderr, body.CommandID, client.TenantID)
+	if err != nil {
+		log.Error("Échec mise à jour du statut de la commande", "error", err)
+	}
 }

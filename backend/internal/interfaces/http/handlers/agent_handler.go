@@ -292,6 +292,17 @@ func (h *AgentHandler) Enroll(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// commandWSType mappe le command_type SQL (chaîne) vers le type numérique du
+// protocole agent (voir leo_agent.h — LEO_MSG_*). L'agent C dispatche sur des
+// types distincts au niveau de l'enveloppe (pas de wrapper générique "COMMAND").
+var commandWSType = map[string]int{
+	"exec_script":       101, // LEO_MSG_EXEC_SCRIPT
+	"install_pkg":       102, // LEO_MSG_INSTALL_PKG
+	"reboot":            103, // LEO_MSG_REBOOT
+	"collect_inventory": 104, // LEO_MSG_COLLECT_INVENTORY
+	"ping":              105, // LEO_MSG_PING
+}
+
 // CreateCommand crée une commande pour un agent et l'envoie si l'agent est connecté.
 //
 //	POST /api/v1/agents/:agentID/commands
@@ -317,6 +328,12 @@ func (h *AgentHandler) CreateCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	wsType, ok := commandWSType[req.Type]
+	if !ok {
+		response.Error(w, http.StatusBadRequest, "VALIDATION_ERROR", "type de commande inconnu : "+req.Type)
+		return
+	}
+
 	commandID := uuid.New().String()
 	payload := req.Payload
 	if len(payload) == 0 {
@@ -336,16 +353,16 @@ func (h *AgentHandler) CreateCommand(w http.ResponseWriter, r *http.Request) {
 	// Envoyer à l'agent si connecté
 	agentOnline := h.hub.IsConnected(agentID)
 	if agentOnline {
+		// body = payload tel quel : l'agent C attend les champs de la commande
+		// (ex: interpreter/script/timeout_sec pour exec_script) directement à
+		// la racine de "body", pas sous un wrapper command_id/type/payload —
+		// command_id est déjà porté par le champ "id" de l'enveloppe.
 		cmdMsg := map[string]any{
 			"v":    1,
-			"type": 200, // LEO_MSG_COMMAND
+			"type": wsType,
 			"id":   commandID,
 			"ts":   time.Now().UnixMilli(),
-			"body": map[string]any{
-				"command_id": commandID,
-				"type":       req.Type,
-				"payload":    req.Payload,
-			},
+			"body": payload,
 		}
 		h.hub.SendToAgent(agentID, cmdMsg)
 
