@@ -19,6 +19,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <pthread.h>
 #include <unistd.h>
 #include <time.h>
@@ -210,43 +211,30 @@ static void *_exec_thread(void *arg) {
 }
 
 /**
- * Lance un thread détaché pour exécuter un script EXEC_SCRIPT.
- * Envoie un CMD_RESULT d'erreur immédiat si la requête est invalide ou si
- * le nombre max de commandes concurrentes est atteint (jamais de blocage
- * du thread WSS ici).
+ * Lance un thread détaché qui exécute {interpreter, script} via leo_exec_script()
+ * puis renvoie le CMD_RESULT correspondant. Commun à EXEC_SCRIPT, INSTALL_PKG et
+ * REBOOT — ces deux dernières ne sont que des scripts construits côté agent à
+ * partir de paramètres validés, plutôt que fournis tels quels par le backend.
+ *
+ * Envoie un CMD_RESULT d'erreur immédiat si le nombre max de commandes
+ * concurrentes est atteint ou en cas d'échec d'allocation/thread (jamais de
+ * blocage du thread WSS ici).
  */
-static void _dispatch_exec_script(leo_agent_t *ag, const char *cmd_id, cJSON *body) {
+static void _launch_exec(leo_agent_t *ag, const char *cmd_id,
+                          const char *interpreter, const char *script,
+                          int timeout_secs) {
     char buf[LEO_MAX_MSG_SIZE];
     int  wlen;
 
-    const char *interpreter = NULL;
-    const char *script      = NULL;
-    int         timeout_secs = LEO_EXEC_DEFAULT_TIMEOUT_SEC;
-
-    if (body) {
-        cJSON *ji = cJSON_GetObjectItemCaseSensitive(body, "interpreter");
-        cJSON *js = cJSON_GetObjectItemCaseSensitive(body, "script");
-        cJSON *jt = cJSON_GetObjectItemCaseSensitive(body, "timeout_sec");
-        if (cJSON_IsString(ji)) interpreter = ji->valuestring;
-        if (cJSON_IsString(js)) script      = js->valuestring;
-        if (cJSON_IsNumber(jt) && jt->valuedouble > 0)
-            timeout_secs = (int)jt->valuedouble;
-    }
+    if (timeout_secs <= 0)
+        timeout_secs = LEO_EXEC_DEFAULT_TIMEOUT_SEC;
     if (timeout_secs > LEO_EXEC_MAX_TIMEOUT_SEC)
         timeout_secs = LEO_EXEC_MAX_TIMEOUT_SEC;
-
-    if (!interpreter || !script) {
-        LOG_WARN("EXEC_SCRIPT sans 'interpreter'/'script' — ignoré (cmd_id=%s)", cmd_id);
-        wlen = leo_proto_build_cmd_result(cmd_id, -1, "",
-                   "Requête invalide : 'interpreter' et 'script' requis", buf, sizeof(buf));
-        if (wlen > 0) leo_conn_send(ag->conn, buf, (size_t)wlen);
-        return;
-    }
 
     pthread_mutex_lock(&ag->exec_mutex);
     if (ag->exec_active_count >= LEO_EXEC_MAX_CONCURRENT) {
         pthread_mutex_unlock(&ag->exec_mutex);
-        LOG_WARN("Trop de scripts en cours (max=%d) — commande rejetée (cmd_id=%s)",
+        LOG_WARN("Trop de commandes en cours (max=%d) — commande rejetée (cmd_id=%s)",
                  LEO_EXEC_MAX_CONCURRENT, cmd_id);
         wlen = leo_proto_build_cmd_result(cmd_id, -1, "",
                    "Trop de commandes en cours d'exécution sur l'agent", buf, sizeof(buf));
@@ -260,7 +248,7 @@ static void _dispatch_exec_script(leo_agent_t *ag, const char *cmd_id, cJSON *bo
     if (ctx) ctx->script = strdup(script);
 
     if (!ctx || !ctx->script) {
-        LOG_ERROR("Allocation échouée pour la commande EXEC_SCRIPT (cmd_id=%s)", cmd_id);
+        LOG_ERROR("Allocation échouée pour la commande (cmd_id=%s)", cmd_id);
         free(ctx);
         pthread_mutex_lock(&ag->exec_mutex);
         ag->exec_active_count--;
@@ -285,7 +273,7 @@ static void _dispatch_exec_script(leo_agent_t *ag, const char *cmd_id, cJSON *bo
     pthread_attr_destroy(&attr);
 
     if (prc != 0) {
-        LOG_ERROR("pthread_create a échoué pour EXEC_SCRIPT (cmd_id=%s) : %d", cmd_id, prc);
+        LOG_ERROR("pthread_create a échoué pour la commande (cmd_id=%s) : %d", cmd_id, prc);
         pthread_mutex_lock(&ag->exec_mutex);
         ag->exec_active_count--;
         pthread_mutex_unlock(&ag->exec_mutex);
@@ -297,8 +285,185 @@ static void _dispatch_exec_script(leo_agent_t *ag, const char *cmd_id, cJSON *bo
         return;
     }
 
-    LOG_INFO("EXEC_SCRIPT lancé (cmd_id=%s, interpreter=%s, timeout=%ds)",
+    LOG_INFO("Commande lancée (cmd_id=%s, interpreter=%s, timeout=%ds)",
              cmd_id, interpreter, timeout_secs);
+}
+
+/**
+ * Dispatch d'une commande EXEC_SCRIPT : script arbitraire fourni par le
+ * backend, exécuté tel quel via _launch_exec().
+ */
+static void _dispatch_exec_script(leo_agent_t *ag, const char *cmd_id, cJSON *body) {
+    const char *interpreter = NULL;
+    const char *script      = NULL;
+    int         timeout_secs = LEO_EXEC_DEFAULT_TIMEOUT_SEC;
+
+    if (body) {
+        cJSON *ji = cJSON_GetObjectItemCaseSensitive(body, "interpreter");
+        cJSON *js = cJSON_GetObjectItemCaseSensitive(body, "script");
+        cJSON *jt = cJSON_GetObjectItemCaseSensitive(body, "timeout_sec");
+        if (cJSON_IsString(ji)) interpreter = ji->valuestring;
+        if (cJSON_IsString(js)) script      = js->valuestring;
+        if (cJSON_IsNumber(jt) && jt->valuedouble > 0)
+            timeout_secs = (int)jt->valuedouble;
+    }
+
+    if (!interpreter || !script) {
+        LOG_WARN("EXEC_SCRIPT sans 'interpreter'/'script' — ignoré (cmd_id=%s)", cmd_id);
+        char buf[LEO_MAX_MSG_SIZE];
+        int wlen = leo_proto_build_cmd_result(cmd_id, -1, "",
+                       "Requête invalide : 'interpreter' et 'script' requis", buf, sizeof(buf));
+        if (wlen > 0) leo_conn_send(ag->conn, buf, (size_t)wlen);
+        return;
+    }
+
+    _launch_exec(ag, cmd_id, interpreter, script, timeout_secs);
+}
+
+/**
+ * Longueur maximale d'un nom de paquet accepté (charset restreint plus bas) —
+ * large pour les noms qualifiés par architecture (ex: "libfoo:amd64").
+ */
+#define LEO_PKG_NAME_MAX_LEN  128
+/** Nombre max de paquets par commande INSTALL_PKG. */
+#define LEO_PKG_MAX_COUNT     32
+
+/**
+ * Valide un nom de paquet contre un charset restreint (alphanumérique + . + -
+ * _ :) avant de l'insérer dans un script shell — ce nom vient du backend et
+ * potentiellement, en amont, d'un utilisateur de la console web. Sans cette
+ * validation, un nom comme "foo; rm -rf /" serait exécuté tel quel puisque le
+ * script est passé à sh sans échappement supplémentaire.
+ */
+static bool _pkg_name_valid(const char *name) {
+    size_t len = strlen(name);
+    if (len == 0 || len > LEO_PKG_NAME_MAX_LEN)
+        return false;
+    for (size_t i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)name[i];
+        if (!isalnum(c) && c != '.' && c != '+' && c != '-' && c != '_' && c != ':')
+            return false;
+    }
+    return true;
+}
+
+/**
+ * Dispatch d'une commande INSTALL_PKG : { "packages": ["a","b"] } ou
+ * { "package": "a" }, "timeout_sec" optionnel. Construit un script
+ * "apt-get install" à partir de noms de paquets validés (voir _pkg_name_valid)
+ * puis délègue à _launch_exec() — même mécanisme que EXEC_SCRIPT.
+ */
+static void _dispatch_install_pkg(leo_agent_t *ag, const char *cmd_id, cJSON *body) {
+    char buf[LEO_MAX_MSG_SIZE];
+    int  wlen;
+
+    const char *names[LEO_PKG_MAX_COUNT];
+    int         n = 0;
+    int         timeout_secs = LEO_EXEC_DEFAULT_TIMEOUT_SEC;
+
+    if (body) {
+        cJSON *jpkgs = cJSON_GetObjectItemCaseSensitive(body, "packages");
+        cJSON *jpkg  = cJSON_GetObjectItemCaseSensitive(body, "package");
+        cJSON *jt    = cJSON_GetObjectItemCaseSensitive(body, "timeout_sec");
+
+        if (cJSON_IsArray(jpkgs)) {
+            cJSON *item;
+            cJSON_ArrayForEach(item, jpkgs) {
+                if (n >= LEO_PKG_MAX_COUNT) break;
+                if (cJSON_IsString(item)) names[n++] = item->valuestring;
+            }
+        } else if (cJSON_IsString(jpkg)) {
+            names[n++] = jpkg->valuestring;
+        }
+        if (cJSON_IsNumber(jt) && jt->valuedouble > 0)
+            timeout_secs = (int)jt->valuedouble;
+    }
+
+    if (n == 0) {
+        LOG_WARN("INSTALL_PKG sans 'package'/'packages' — ignoré (cmd_id=%s)", cmd_id);
+        wlen = leo_proto_build_cmd_result(cmd_id, -1, "",
+                   "Requête invalide : 'package' ou 'packages' requis", buf, sizeof(buf));
+        if (wlen > 0) leo_conn_send(ag->conn, buf, (size_t)wlen);
+        return;
+    }
+
+    /* Construit "apt-get ... install -- <pkg1> <pkg2> ..." dans un buffer
+     * fixe. "--" arrête l'analyse d'options : un nom de paquet ne peut donc
+     * pas être interprété comme un flag d'apt-get même s'il commence par
+     * '-' (le charset autorisé par _pkg_name_valid le permettrait). */
+    char script[512] =
+        "export DEBIAN_FRONTEND=noninteractive\n"
+        "apt-get update -qq && apt-get install -y --no-install-recommends -- ";
+    size_t off = strlen(script);
+
+    for (int i = 0; i < n; i++) {
+        if (!_pkg_name_valid(names[i])) {
+            LOG_WARN("INSTALL_PKG : nom de paquet invalide, commande rejetée (cmd_id=%s)", cmd_id);
+            wlen = leo_proto_build_cmd_result(cmd_id, -1, "",
+                       "Requête invalide : nom de paquet non autorisé", buf, sizeof(buf));
+            if (wlen > 0) leo_conn_send(ag->conn, buf, (size_t)wlen);
+            return;
+        }
+        size_t plen = strlen(names[i]);
+        /* +2 pour l'espace séparateur et le terminateur nul. */
+        if (off + plen + 2 >= sizeof(script)) {
+            LOG_WARN("INSTALL_PKG : trop de paquets pour le buffer de script (cmd_id=%s)", cmd_id);
+            wlen = leo_proto_build_cmd_result(cmd_id, -1, "",
+                       "Requête invalide : trop de paquets", buf, sizeof(buf));
+            if (wlen > 0) leo_conn_send(ag->conn, buf, (size_t)wlen);
+            return;
+        }
+        if (i > 0) script[off++] = ' ';
+        memcpy(script + off, names[i], plen);
+        off += plen;
+    }
+    script[off] = '\0';
+    strncat(script, " 2>&1", sizeof(script) - strlen(script) - 1);
+
+    _launch_exec(ag, cmd_id, "sh", script, timeout_secs);
+}
+
+/** Délai par défaut avant redémarrage, en secondes — laisse le temps à
+ * l'utilisateur de la machine de sauvegarder son travail. */
+#define LEO_REBOOT_DEFAULT_DELAY_SEC  60
+/** Borne haute du délai accepté. */
+#define LEO_REBOOT_MAX_DELAY_SEC      3600
+/* La commande "shutdown" planifie le redémarrage et retourne immédiatement :
+ * ce timeout ne couvre que la planification, pas l'attente du délai lui-même. */
+#define LEO_REBOOT_SCHEDULE_TIMEOUT_SEC  15
+
+/**
+ * Dispatch d'une commande REBOOT : { "delay_sec": <int> } optionnel (défaut
+ * LEO_REBOOT_DEFAULT_DELAY_SEC). Construit un appel à `shutdown -r`, qui
+ * planifie le redémarrage et rend la main tout de suite — le CMD_RESULT
+ * confirme donc la planification, pas l'exécution effective du redémarrage
+ * (qui coupera la connexion de l'agent de toute façon).
+ */
+static void _dispatch_reboot(leo_agent_t *ag, const char *cmd_id, cJSON *body) {
+    int delay_sec = LEO_REBOOT_DEFAULT_DELAY_SEC;
+
+    if (body) {
+        cJSON *jd = cJSON_GetObjectItemCaseSensitive(body, "delay_sec");
+        if (cJSON_IsNumber(jd) && jd->valuedouble >= 0)
+            delay_sec = (int)jd->valuedouble;
+    }
+    if (delay_sec > LEO_REBOOT_MAX_DELAY_SEC)
+        delay_sec = LEO_REBOOT_MAX_DELAY_SEC;
+
+    char script[160];
+    if (delay_sec <= 0) {
+        snprintf(script, sizeof(script),
+                 "shutdown -r now 2>&1 || systemctl reboot 2>&1");
+    } else {
+        /* shutdown(8) ne prend un délai qu'en minutes entières, arrondi au
+         * supérieur pour ne jamais planifier plus tôt que demandé. */
+        int minutes = (delay_sec + 59) / 60;
+        snprintf(script, sizeof(script),
+                 "shutdown -r +%d 2>&1 || systemctl reboot 2>&1", minutes);
+    }
+
+    LOG_WARN("REBOOT planifié dans %ds (cmd_id=%s)", delay_sec, cmd_id);
+    _launch_exec(ag, cmd_id, "sh", script, LEO_REBOOT_SCHEDULE_TIMEOUT_SEC);
 }
 
 /* ─── Dispatch des messages entrants ─────────────────────────────────────── */
@@ -346,10 +511,12 @@ static void _on_message(const char *json_str, size_t len, void *userdata) {
 
     case LEO_MSG_INSTALL_PKG:
         LOG_INFO("Commande INSTALL_PKG reçue (cmd_id=%s)", msg.id);
+        _dispatch_install_pkg(ag, msg.id, msg.body);
         break;
 
     case LEO_MSG_REBOOT:
-        LOG_WARN("Commande REBOOT reçue — redémarrage planifié");
+        LOG_WARN("Commande REBOOT reçue (cmd_id=%s)", msg.id);
+        _dispatch_reboot(ag, msg.id, msg.body);
         break;
 
     case LEO_MSG_COLLECT_INVENTORY:
