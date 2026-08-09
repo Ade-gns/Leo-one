@@ -108,6 +108,38 @@ typedef struct {
 } leo_metrics_t;
 
 /* ─────────────────────────────────────────────────────────────────────────
+ * Inventaire matériel / logiciel (LEO_MSG_INVENTORY)
+ * ───────────────────────────────────────────────────────────────────────── */
+
+/** Nombre max d'entrées logicielles remontées par collecte. Borne la taille
+ *  du message WS (LEO_MAX_MSG_SIZE = 64 Ko) : au-delà, le message INVENTORY
+ *  complet (matériel + logiciel) échouerait à sérialiser et serait perdu —
+ *  150 × ~300 octets JSON/entrée (pire cas réaliste) reste sous ~45 Ko, avec
+ *  de la marge pour l'objet "hardware" et l'enveloppe. Un système avec plus
+ *  de paquets voit sa liste tronquée plutôt que l'inventaire entier perdu. */
+#define LEO_INVENTORY_MAX_SW_ITEMS  150
+#define LEO_INVENTORY_MAX_SOCKETS    16
+
+typedef struct {
+    char     cpu_model[128];
+    int      cpu_cores;          /* 0 si indéterminable (ex: cpuinfo sans "physical id") */
+    int      cpu_threads;        /* toujours renseigné : sysconf(_SC_NPROCESSORS_ONLN) */
+    uint64_t ram_total_bytes;
+    int      disk_count;         /* nombre de disques physiques (hors loop/optique) */
+    char     bios_version[64];
+    char     bios_vendor[64];
+    char     motherboard[128];
+    char     serial_number[128]; /* souvent vide si l'agent ne tourne pas en root */
+} leo_hw_inventory_t;
+
+typedef struct {
+    char name[128];
+    char version[64];
+    char publisher[128];
+    char install_path[256];
+} leo_sw_item_t;
+
+/* ─────────────────────────────────────────────────────────────────────────
  * État interne de l'agent (machine d'état)
  * ───────────────────────────────────────────────────────────────────────── */
 typedef enum {

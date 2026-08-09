@@ -15,6 +15,7 @@
 #include "protocol.h"
 #include "logger.h"
 #include "executor.h"
+#include "inventory.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -149,6 +150,39 @@ static void *_metrics_thread(void *arg) {
     return NULL;
 }
 
+/**
+ * Réserve un slot d'exécution (borne LEO_EXEC_MAX_CONCURRENT, commune à tous
+ * les types de commandes qui tournent dans un thread détaché — scripts et
+ * collecte d'inventaire). Envoie un CMD_RESULT d'erreur et retourne false si
+ * la limite est atteinte.
+ */
+static bool _reserve_exec_slot(leo_agent_t *ag, const char *cmd_id) {
+    pthread_mutex_lock(&ag->exec_mutex);
+    if (ag->exec_active_count >= LEO_EXEC_MAX_CONCURRENT) {
+        pthread_mutex_unlock(&ag->exec_mutex);
+        LOG_WARN("Trop de commandes en cours (max=%d) — commande rejetée (cmd_id=%s)",
+                 LEO_EXEC_MAX_CONCURRENT, cmd_id);
+        char buf[LEO_MAX_MSG_SIZE];
+        int wlen = leo_proto_build_cmd_result(cmd_id, -1, "",
+                       "Trop de commandes en cours d'exécution sur l'agent", buf, sizeof(buf));
+        if (wlen > 0) leo_conn_send(ag->conn, buf, (size_t)wlen);
+        return false;
+    }
+    ag->exec_active_count++;
+    pthread_mutex_unlock(&ag->exec_mutex);
+    return true;
+}
+
+/** Libère un slot réservé par _reserve_exec_slot() — appelé à la fin de
+ *  chaque thread de commande, y compris sur les chemins d'erreur avant
+ *  lancement du thread. Réveille leo_agent_stop() s'il attend. */
+static void _release_exec_slot(leo_agent_t *ag) {
+    pthread_mutex_lock(&ag->exec_mutex);
+    ag->exec_active_count--;
+    pthread_cond_signal(&ag->exec_cond);
+    pthread_mutex_unlock(&ag->exec_mutex);
+}
+
 /* ─── Thread : exécution d'un script (un thread détaché par commande) ───── */
 
 /**
@@ -201,11 +235,7 @@ static void *_exec_thread(void *arg) {
 
     free(ctx->script);
     free(ctx);
-
-    pthread_mutex_lock(&ag->exec_mutex);
-    ag->exec_active_count--;
-    pthread_cond_signal(&ag->exec_cond);
-    pthread_mutex_unlock(&ag->exec_mutex);
+    _release_exec_slot(ag);
 
     return NULL;
 }
@@ -223,26 +253,16 @@ static void *_exec_thread(void *arg) {
 static void _launch_exec(leo_agent_t *ag, const char *cmd_id,
                           const char *interpreter, const char *script,
                           int timeout_secs) {
-    char buf[LEO_MAX_MSG_SIZE];
-    int  wlen;
-
     if (timeout_secs <= 0)
         timeout_secs = LEO_EXEC_DEFAULT_TIMEOUT_SEC;
     if (timeout_secs > LEO_EXEC_MAX_TIMEOUT_SEC)
         timeout_secs = LEO_EXEC_MAX_TIMEOUT_SEC;
 
-    pthread_mutex_lock(&ag->exec_mutex);
-    if (ag->exec_active_count >= LEO_EXEC_MAX_CONCURRENT) {
-        pthread_mutex_unlock(&ag->exec_mutex);
-        LOG_WARN("Trop de commandes en cours (max=%d) — commande rejetée (cmd_id=%s)",
-                 LEO_EXEC_MAX_CONCURRENT, cmd_id);
-        wlen = leo_proto_build_cmd_result(cmd_id, -1, "",
-                   "Trop de commandes en cours d'exécution sur l'agent", buf, sizeof(buf));
-        if (wlen > 0) leo_conn_send(ag->conn, buf, (size_t)wlen);
+    if (!_reserve_exec_slot(ag, cmd_id))
         return;
-    }
-    ag->exec_active_count++;
-    pthread_mutex_unlock(&ag->exec_mutex);
+
+    char buf[LEO_MAX_MSG_SIZE];
+    int  wlen;
 
     _exec_ctx_t *ctx = calloc(1, sizeof(*ctx));
     if (ctx) ctx->script = strdup(script);
@@ -250,9 +270,7 @@ static void _launch_exec(leo_agent_t *ag, const char *cmd_id,
     if (!ctx || !ctx->script) {
         LOG_ERROR("Allocation échouée pour la commande (cmd_id=%s)", cmd_id);
         free(ctx);
-        pthread_mutex_lock(&ag->exec_mutex);
-        ag->exec_active_count--;
-        pthread_mutex_unlock(&ag->exec_mutex);
+        _release_exec_slot(ag);
         wlen = leo_proto_build_cmd_result(cmd_id, -1, "",
                    "Erreur interne de l'agent (allocation)", buf, sizeof(buf));
         if (wlen > 0) leo_conn_send(ag->conn, buf, (size_t)wlen);
@@ -274,9 +292,7 @@ static void _launch_exec(leo_agent_t *ag, const char *cmd_id,
 
     if (prc != 0) {
         LOG_ERROR("pthread_create a échoué pour la commande (cmd_id=%s) : %d", cmd_id, prc);
-        pthread_mutex_lock(&ag->exec_mutex);
-        ag->exec_active_count--;
-        pthread_mutex_unlock(&ag->exec_mutex);
+        _release_exec_slot(ag);
         free(ctx->script);
         free(ctx);
         wlen = leo_proto_build_cmd_result(cmd_id, -1, "",
@@ -466,6 +482,109 @@ static void _dispatch_reboot(leo_agent_t *ag, const char *cmd_id, cJSON *body) {
     _launch_exec(ag, cmd_id, "sh", script, LEO_REBOOT_SCHEDULE_TIMEOUT_SEC);
 }
 
+/* ─── Thread : collecte d'inventaire (un thread détaché par commande) ───── */
+
+typedef struct {
+    leo_agent_t *ag;
+    char         cmd_id[LEO_UUID_STR_LEN];
+} _inventory_ctx_t;
+
+/**
+ * Collecte l'inventaire matériel + logiciel, envoie le message INVENTORY
+ * (LEO_MSG_INVENTORY, séparé) puis le CMD_RESULT qui clôt la commande
+ * COLLECT_INVENTORY. Dans un thread dédié : la collecte logicielle passe par
+ * dpkg-query (popen), potentiellement lente sur un système avec beaucoup de
+ * paquets — ne doit jamais bloquer le thread WSS.
+ */
+static void *_inventory_thread(void *arg) {
+    _inventory_ctx_t *ctx = (_inventory_ctx_t *)arg;
+    leo_agent_t      *ag  = ctx->ag;
+
+    leo_hw_inventory_t hw;
+    leo_error_t hw_rc = leo_inventory_collect_hw(&hw);
+
+    leo_sw_item_t *sw = calloc(LEO_INVENTORY_MAX_SW_ITEMS, sizeof(leo_sw_item_t));
+    int sw_count = sw ? leo_inventory_collect_sw(sw, LEO_INVENTORY_MAX_SW_ITEMS) : -1;
+    if (sw_count < 0) sw_count = 0;
+
+    char        buf[LEO_MAX_MSG_SIZE];
+    int         exit_code = -1;
+    const char *err_s     = "";
+    char        summary[64] = "";
+
+    if (hw_rc != LEO_OK) {
+        err_s = "Échec de la collecte de l'inventaire matériel";
+    } else {
+        int wlen = leo_proto_build_inventory(&hw, sw, sw_count, buf, sizeof(buf));
+        if (wlen <= 0) {
+            err_s = "Échec de sérialisation de l'inventaire (trop volumineux ?)";
+        } else if (leo_conn_send(ag->conn, buf, (size_t)wlen) != LEO_OK) {
+            err_s = "Échec envoi du message INVENTORY";
+        } else {
+            exit_code = 0;
+            snprintf(summary, sizeof(summary), "Inventaire envoyé (%d logiciel(s))", sw_count);
+        }
+    }
+
+    free(sw);
+
+    int wlen2 = leo_proto_build_cmd_result(ctx->cmd_id, exit_code, summary, err_s,
+                                           buf, sizeof(buf));
+    if (wlen2 > 0) leo_conn_send(ag->conn, buf, (size_t)wlen2);
+
+    LOG_INFO("COLLECT_INVENTORY terminé (cmd_id=%s, exit_code=%d, sw_count=%d)",
+             ctx->cmd_id, exit_code, sw_count);
+
+    free(ctx);
+    _release_exec_slot(ag);
+
+    return NULL;
+}
+
+/**
+ * Dispatch d'une commande COLLECT_INVENTORY : pas de paramètres. Lance un
+ * thread détaché sous la même borne de concurrence que les autres commandes.
+ */
+static void _dispatch_collect_inventory(leo_agent_t *ag, const char *cmd_id) {
+    if (!_reserve_exec_slot(ag, cmd_id))
+        return;
+
+    char buf[LEO_MAX_MSG_SIZE];
+    int  wlen;
+
+    _inventory_ctx_t *ctx = calloc(1, sizeof(*ctx));
+    if (!ctx) {
+        LOG_ERROR("Allocation échouée pour COLLECT_INVENTORY (cmd_id=%s)", cmd_id);
+        _release_exec_slot(ag);
+        wlen = leo_proto_build_cmd_result(cmd_id, -1, "",
+                   "Erreur interne de l'agent (allocation)", buf, sizeof(buf));
+        if (wlen > 0) leo_conn_send(ag->conn, buf, (size_t)wlen);
+        return;
+    }
+    ctx->ag = ag;
+    strncpy(ctx->cmd_id, cmd_id, sizeof(ctx->cmd_id) - 1);
+
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+
+    pthread_t th;
+    int prc = pthread_create(&th, &attr, _inventory_thread, ctx);
+    pthread_attr_destroy(&attr);
+
+    if (prc != 0) {
+        LOG_ERROR("pthread_create a échoué pour COLLECT_INVENTORY (cmd_id=%s) : %d", cmd_id, prc);
+        _release_exec_slot(ag);
+        free(ctx);
+        wlen = leo_proto_build_cmd_result(cmd_id, -1, "",
+                   "Erreur interne de l'agent (thread)", buf, sizeof(buf));
+        if (wlen > 0) leo_conn_send(ag->conn, buf, (size_t)wlen);
+        return;
+    }
+
+    LOG_INFO("COLLECT_INVENTORY lancé (cmd_id=%s)", cmd_id);
+}
+
 /* ─── Dispatch des messages entrants ─────────────────────────────────────── */
 
 static void _on_message(const char *json_str, size_t len, void *userdata) {
@@ -520,7 +639,8 @@ static void _on_message(const char *json_str, size_t len, void *userdata) {
         break;
 
     case LEO_MSG_COLLECT_INVENTORY:
-        LOG_INFO("Demande d'inventaire reçue");
+        LOG_INFO("Demande d'inventaire reçue (cmd_id=%s)", msg.id);
+        _dispatch_collect_inventory(ag, msg.id);
         break;
 
     case LEO_MSG_CONFIG_UPDATE:

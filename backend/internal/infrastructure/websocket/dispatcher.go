@@ -8,8 +8,9 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	agentDomain  "github.com/yourorg/leo-one/internal/domain/agent"
-	metricDomain "github.com/yourorg/leo-one/internal/domain/metric"
+	agentDomain     "github.com/yourorg/leo-one/internal/domain/agent"
+	inventoryDomain "github.com/yourorg/leo-one/internal/domain/inventory"
+	metricDomain    "github.com/yourorg/leo-one/internal/domain/metric"
 )
 
 // Enveloppe du protocole WSS (doit correspondre au format de l'agent C).
@@ -64,27 +65,56 @@ type cmdResultBody struct {
 	Stderr    string `json:"stderr"`
 }
 
+// inventoryBody est le body du message INVENTORY — voir agent/src/protocol.c
+// leo_proto_build_inventory() côté agent.
+type inventoryBody struct {
+	Hardware hardwareBody   `json:"hardware"`
+	Software []softwareBody `json:"software"`
+}
+
+type hardwareBody struct {
+	CPUModel      string `json:"cpu_model"`
+	CPUCores      int    `json:"cpu_cores"`
+	CPUThreads    int    `json:"cpu_threads"`
+	RAMTotalBytes int64  `json:"ram_total_bytes"`
+	DiskCount     int    `json:"disk_count"`
+	BIOSVersion   string `json:"bios_version"`
+	BIOSVendor    string `json:"bios_vendor"`
+	Motherboard   string `json:"motherboard"`
+	SerialNumber  string `json:"serial_number"`
+}
+
+type softwareBody struct {
+	Name        string `json:"name"`
+	Version     string `json:"version"`
+	Publisher   string `json:"publisher"`
+	InstallPath string `json:"install_path"`
+}
+
 // Dispatcher route les messages entrants des agents vers les use cases appropriés.
 type Dispatcher struct {
-	agentRepo  agentDomain.Repository
-	metricRepo metricDomain.Repository
-	pool       *pgxpool.Pool // accès direct pour la table commands (pas de repo dédié)
-	hub        *Hub          // référence arrière pour envoyer HELLO_ACK, etc.
-	logger     *slog.Logger
+	agentRepo     agentDomain.Repository
+	metricRepo    metricDomain.Repository
+	inventoryRepo inventoryDomain.Repository
+	pool          *pgxpool.Pool // accès direct pour la table commands (pas de repo dédié)
+	hub           *Hub          // référence arrière pour envoyer HELLO_ACK, etc.
+	logger        *slog.Logger
 }
 
 // NewDispatcher crée un Dispatcher avec ses dépendances injectées.
 func NewDispatcher(
-	agentRepo  agentDomain.Repository,
+	agentRepo agentDomain.Repository,
 	metricRepo metricDomain.Repository,
-	pool       *pgxpool.Pool,
-	logger     *slog.Logger,
+	inventoryRepo inventoryDomain.Repository,
+	pool *pgxpool.Pool,
+	logger *slog.Logger,
 ) *Dispatcher {
 	return &Dispatcher{
-		agentRepo:  agentRepo,
-		metricRepo: metricRepo,
-		pool:       pool,
-		logger:     logger,
+		agentRepo:     agentRepo,
+		metricRepo:    metricRepo,
+		inventoryRepo: inventoryRepo,
+		pool:          pool,
+		logger:        logger,
 	}
 }
 
@@ -119,6 +149,8 @@ func (d *Dispatcher) Dispatch(client *Client, raw []byte) {
 		d.handleMetrics(client, env, log)
 	case msgTypeCmdResult:
 		d.handleCmdResult(client, env, log)
+	case msgTypeInventory:
+		d.handleInventory(client, env, log)
 	case msgTypePong:
 		log.Debug("PONG reçu")
 	default:
@@ -249,4 +281,48 @@ func (d *Dispatcher) handleCmdResult(client *Client, env envelope, log *slog.Log
 	if err != nil {
 		log.Error("Échec mise à jour du statut de la commande", "error", err)
 	}
+}
+
+// handleInventory persiste le snapshot matériel/logiciel envoyé par l'agent
+// suite à une commande COLLECT_INVENTORY (le CMD_RESULT qui clôt cette
+// commande arrive séparément, voir handleCmdResult).
+func (d *Dispatcher) handleInventory(client *Client, env envelope, log *slog.Logger) {
+	var body inventoryBody
+	if err := json.Unmarshal(env.Body, &body); err != nil {
+		log.Error("Impossible de décoder INVENTORY body", "error", err)
+		return
+	}
+
+	ctx := context.Background()
+
+	hw := inventoryDomain.HardwareSnapshot{
+		CPUModel:      body.Hardware.CPUModel,
+		CPUCores:      body.Hardware.CPUCores,
+		CPUThreads:    body.Hardware.CPUThreads,
+		RAMTotalBytes: body.Hardware.RAMTotalBytes,
+		DiskCount:     body.Hardware.DiskCount,
+		BIOSVersion:   body.Hardware.BIOSVersion,
+		BIOSVendor:    body.Hardware.BIOSVendor,
+		Motherboard:   body.Hardware.Motherboard,
+		SerialNumber:  body.Hardware.SerialNumber,
+	}
+	if err := d.inventoryRepo.SaveHardware(ctx, client.TenantID, client.AgentID, hw); err != nil {
+		log.Error("Échec enregistrement inventaire matériel", "error", err)
+	}
+
+	items := make([]inventoryDomain.SoftwareSnapshotItem, len(body.Software))
+	for i, sw := range body.Software {
+		items[i] = inventoryDomain.SoftwareSnapshotItem{
+			Name:        sw.Name,
+			Version:     sw.Version,
+			Publisher:   sw.Publisher,
+			InstallPath: sw.InstallPath,
+		}
+	}
+	if err := d.inventoryRepo.ReplaceSoftware(ctx, client.TenantID, client.AgentID, items); err != nil {
+		log.Error("Échec enregistrement inventaire logiciel", "error", err)
+		return
+	}
+
+	log.Info("Inventaire ingéré", "cpu_model", body.Hardware.CPUModel, "software_count", len(items))
 }

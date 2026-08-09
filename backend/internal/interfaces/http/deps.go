@@ -17,7 +17,7 @@ type Dependencies struct {
 	AgentHandler      *handlers.AgentHandler
 	DashboardHandler  *handlers.DashboardHandler
 	MetricHandler     *handlers.MetricHandler
-	InventoryHandler  *handlers.StubHandler
+	InventoryHandler  *handlers.InventoryHandler
 	AlertHandler      *handlers.AlertHandler
 	TicketHandler     *handlers.StubHandler
 	WorkspaceHandler  *handlers.StubHandler

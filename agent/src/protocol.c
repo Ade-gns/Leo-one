@@ -160,6 +160,43 @@ int leo_proto_build_pong(const char *ping_id, char *buf, size_t bufsz) {
     return _serialize(LEO_MSG_PONG, body, buf, bufsz);
 }
 
+int leo_proto_build_inventory(const leo_hw_inventory_t *hw,
+                              const leo_sw_item_t *sw, int sw_count,
+                              char *buf, size_t bufsz) {
+    if (!hw) return -1;
+
+    cJSON *body = cJSON_CreateObject();
+    if (!body) return -1;
+
+    cJSON *jhw = cJSON_CreateObject();
+    if (!jhw) { cJSON_Delete(body); return -1; }
+    cJSON_AddStringToObject(jhw, "cpu_model",       hw->cpu_model);
+    cJSON_AddNumberToObject(jhw, "cpu_cores",       hw->cpu_cores);
+    cJSON_AddNumberToObject(jhw, "cpu_threads",     hw->cpu_threads);
+    cJSON_AddNumberToObject(jhw, "ram_total_bytes", (double)hw->ram_total_bytes);
+    cJSON_AddNumberToObject(jhw, "disk_count",      hw->disk_count);
+    cJSON_AddStringToObject(jhw, "bios_version",    hw->bios_version);
+    cJSON_AddStringToObject(jhw, "bios_vendor",     hw->bios_vendor);
+    cJSON_AddStringToObject(jhw, "motherboard",     hw->motherboard);
+    cJSON_AddStringToObject(jhw, "serial_number",   hw->serial_number);
+    cJSON_AddItemToObject(body, "hardware", jhw);
+
+    cJSON *jsw = cJSON_CreateArray();
+    if (!jsw) { cJSON_Delete(body); return -1; }
+    for (int i = 0; i < sw_count && sw; i++) {
+        cJSON *item = cJSON_CreateObject();
+        if (!item) continue;
+        cJSON_AddStringToObject(item, "name",         sw[i].name);
+        cJSON_AddStringToObject(item, "version",      sw[i].version);
+        cJSON_AddStringToObject(item, "publisher",    sw[i].publisher);
+        cJSON_AddStringToObject(item, "install_path", sw[i].install_path);
+        cJSON_AddItemToArray(jsw, item);
+    }
+    cJSON_AddItemToObject(body, "software", jsw);
+
+    return _serialize(LEO_MSG_INVENTORY, body, buf, bufsz);
+}
+
 /* ─── Désérialisation ───────────────────────────────────────────────────── */
 
 leo_error_t leo_proto_parse(const char *json_str, leo_incoming_msg_t *out) {

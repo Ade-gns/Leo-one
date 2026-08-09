@@ -34,6 +34,7 @@ if(TARGET_OS STREQUAL "linux" OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
         platform/linux/service_linux.c
         platform/linux/executor_linux.c
         platform/linux/crypto_linux.c
+        platform/linux/inventory_linux.c
     )
     add_definitions(-DLEO_PLATFORM_LINUX)
 

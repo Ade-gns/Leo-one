@@ -51,6 +51,17 @@ int leo_proto_build_cmd_result(const char *cmd_id, int exit_code,
  */
 int leo_proto_build_pong(const char *ping_id, char *buf, size_t bufsz);
 
+/**
+ * Construit un message INVENTORY à partir d'un snapshot matériel et d'une
+ * liste de logiciels installés.
+ * @param hw       Snapshot matériel (jamais NULL)
+ * @param sw       Tableau des logiciels installés (peut être NULL si sw_count == 0)
+ * @param sw_count Nombre d'entrées valides dans sw
+ */
+int leo_proto_build_inventory(const leo_hw_inventory_t *hw,
+                              const leo_sw_item_t *sw, int sw_count,
+                              char *buf, size_t bufsz);
+
 /* ─── Désérialisation (backend → agent) ──────────────────────────────────── */
 
 /**
