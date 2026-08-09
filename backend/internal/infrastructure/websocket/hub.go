@@ -53,11 +53,19 @@ func (h *Hub) Register(client *Client) {
 }
 
 // Unregister supprime un client déconnecté du registre.
+//
+// Ne fait rien si ce client n'est plus celui actuellement enregistré pour cet
+// agent_id : Register() remplace l'entrée (et ferme le send de l'ancien
+// client) sur une reconnexion, sans passer par Unregister. Quand le ReadPump
+// de l'ancien client se termine à son tour, son Unregister(oldClient) différé
+// arrive après coup — sans cette vérification d'identité, on refermerait un
+// canal déjà fermé (panique) et on supprimerait à tort l'entrée du nouveau
+// client, pourtant toujours connecté.
 func (h *Hub) Unregister(client *Client) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	if _, ok := h.clients[client.AgentID]; ok {
+	if current, ok := h.clients[client.AgentID]; ok && current == client {
 		close(client.send)
 		delete(h.clients, client.AgentID)
 		h.logger.Info("Agent déconnecté",
