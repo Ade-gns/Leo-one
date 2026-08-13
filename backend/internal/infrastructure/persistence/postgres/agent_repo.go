@@ -236,13 +236,16 @@ func (r *AgentRepo) Update(ctx context.Context, a *agentDomain.Agent) error {
 	return err
 }
 
-// UpdateStatus met à jour uniquement le statut et last_seen_at (appelé fréquemment par le dispatcher).
+// UpdateStatus met à jour le statut et, si lastSeen est non-nil, last_seen_at
+// (appelé fréquemment par le dispatcher). lastSeen à nil laisse la valeur en
+// BDD inchangée — utilisé pour passer offline sans effacer la date de dernier
+// contact réel.
 func (r *AgentRepo) UpdateStatus(ctx context.Context, agentID string, status agentDomain.Status, lastSeen *time.Time) error {
 	ctx = ensureCtx(ctx)
 
 	_, err := r.pool.Exec(ctx, `
 		UPDATE agents
-		SET status = $1::agent_status, last_seen_at = $2, updated_at = NOW()
+		SET status = $1::agent_status, last_seen_at = COALESCE($2, last_seen_at), updated_at = NOW()
 		WHERE id = $3
 	`, string(status), lastSeen, agentID)
 

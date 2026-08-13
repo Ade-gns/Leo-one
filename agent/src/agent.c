@@ -24,6 +24,7 @@
 #include <pthread.h>
 #include <unistd.h>
 #include <time.h>
+#include <errno.h>
 
 /* ─── Exécution de scripts : bornes de sécurité ──────────────────────────── */
 
@@ -47,6 +48,12 @@ struct leo_agent {
     pthread_t             metrics_thread;
     volatile bool         threads_stop;
     volatile bool         force_heartbeat_pending;  /* Set by FORCE_HEARTBEAT msg */
+    /* Protège threads_stop/force_heartbeat_pending pendant l'attente dans
+     * _interruptible_sleep() et permet de réveiller un thread endormi
+     * immédiatement (arrêt ou FORCE_HEARTBEAT) au lieu d'attendre jusqu'à
+     * l'intervalle complet — crucial maintenant qu'il peut atteindre 3h. */
+    pthread_mutex_t        wake_mutex;
+    pthread_cond_t         wake_cond;
 
     /* Exécution de scripts (threads détachés, un par commande EXEC_SCRIPT) */
     pthread_mutex_t        exec_mutex;
@@ -103,14 +110,25 @@ typedef struct {
 
 /* ─── Helpers ───────────────────────────────────────────────────────────── */
 
-/** Attend N secondes en vérifiant threads_stop toutes les 100ms. */
-static void _interruptible_sleep(const struct leo_agent *ag, int secs) {
-    int elapsed_ms = 0;
-    while (!ag->threads_stop && elapsed_ms < secs * 1000) {
-        struct timespec ts = { .tv_sec = 0, .tv_nsec = 100 * 1000000L };
-        nanosleep(&ts, NULL);
-        elapsed_ms += 100;
+/** Attend jusqu'à `secs` secondes, réellement endormi (pthread_cond_timedwait,
+ *  pas de polling) — important maintenant que les intervalles vont jusqu'à
+ *  plusieurs heures : réveiller un thread toutes les 100ms pendant 3h coûte
+ *  bien plus cher en énergie qu'un vrai sleep bloquant.
+ *  Réveil anticipé si threads_stop passe à true, ou si wake_on_force est vrai
+ *  et que force_heartbeat_pending passe à true (mis par _on_message sur
+ *  réception de FORCE_HEARTBEAT — sans ce réveil anticipé, un heartbeat forcé
+ *  ne partirait qu'au prochain tick naturel, jusqu'à 3h plus tard). */
+static void _interruptible_sleep(leo_agent_t *ag, int secs, bool wake_on_force) {
+    struct timespec deadline;
+    clock_gettime(CLOCK_REALTIME, &deadline);
+    deadline.tv_sec += secs;
+
+    pthread_mutex_lock(&ag->wake_mutex);
+    while (!ag->threads_stop && !(wake_on_force && ag->force_heartbeat_pending)) {
+        if (pthread_cond_timedwait(&ag->wake_cond, &ag->wake_mutex, &deadline) == ETIMEDOUT)
+            break;
     }
+    pthread_mutex_unlock(&ag->wake_mutex);
 }
 
 /* ─── Thread : Heartbeat ─────────────────────────────────────────────────── */
@@ -124,13 +142,15 @@ static void *_heartbeat_thread(void *arg) {
              ag->config.heartbeat_interval_sec);
 
     while (!ag->threads_stop) {
-        _interruptible_sleep(ag, ag->config.heartbeat_interval_sec);
+        _interruptible_sleep(ag, ag->config.heartbeat_interval_sec, /*wake_on_force=*/true);
         if (ag->threads_stop) break;
 
         /* Check if forced heartbeat was requested */
+        pthread_mutex_lock(&ag->wake_mutex);
         bool force = ag->force_heartbeat_pending;
+        ag->force_heartbeat_pending = false;
+        pthread_mutex_unlock(&ag->wake_mutex);
         if (force) {
-            ag->force_heartbeat_pending = false;
             LOG_DEBUG("Forced heartbeat triggered");
         }
 
@@ -165,7 +185,7 @@ static void *_metrics_thread(void *arg) {
              ag->config.metrics_interval_sec);
 
     while (!ag->threads_stop) {
-        _interruptible_sleep(ag, ag->config.metrics_interval_sec);
+        _interruptible_sleep(ag, ag->config.metrics_interval_sec, /*wake_on_force=*/false);
         if (ag->threads_stop) break;
 
         if (!leo_conn_is_connected(ag->conn)) {
@@ -809,7 +829,10 @@ static void _on_message(const char *json_str, size_t len, void *userdata) {
 
     case LEO_MSG_FORCE_HEARTBEAT:
         LOG_INFO("Force heartbeat reçue du serveur");
+        pthread_mutex_lock(&ag->wake_mutex);
         ag->force_heartbeat_pending = true;
+        pthread_cond_broadcast(&ag->wake_cond);
+        pthread_mutex_unlock(&ag->wake_mutex);
         break;
 
     case LEO_MSG_CONFIG_UPDATE:
@@ -845,9 +868,14 @@ leo_agent_t *leo_agent_start(const char *config_path) {
     pthread_cond_init(&ag->exec_cond, NULL);
     ag->exec_active_count = 0;
 
+    pthread_mutex_init(&ag->wake_mutex, NULL);
+    pthread_cond_init(&ag->wake_cond, NULL);
+
     /* ── Chargement de la configuration ── */
     if (leo_config_load(config_path, &ag->config) != LEO_OK) {
         LOG_FATAL("Impossible de charger la configuration depuis %s", config_path);
+        pthread_cond_destroy(&ag->wake_cond);
+        pthread_mutex_destroy(&ag->wake_mutex);
         pthread_cond_destroy(&ag->exec_cond);
         pthread_mutex_destroy(&ag->exec_mutex);
         free(ag);
@@ -857,6 +885,8 @@ leo_agent_t *leo_agent_start(const char *config_path) {
     /* ── Initialisation du sous-système métriques ── */
     if (leo_metrics_init() != LEO_OK) {
         LOG_FATAL("Impossible d'initialiser le sous-système métriques");
+        pthread_cond_destroy(&ag->wake_cond);
+        pthread_mutex_destroy(&ag->wake_mutex);
         pthread_cond_destroy(&ag->exec_cond);
         pthread_mutex_destroy(&ag->exec_mutex);
         free(ag);
@@ -869,6 +899,8 @@ leo_agent_t *leo_agent_start(const char *config_path) {
     if (!ag->conn) {
         LOG_FATAL("Impossible de créer la connexion WSS");
         leo_metrics_destroy();
+        pthread_cond_destroy(&ag->wake_cond);
+        pthread_mutex_destroy(&ag->wake_mutex);
         pthread_cond_destroy(&ag->exec_cond);
         pthread_mutex_destroy(&ag->exec_mutex);
         free(ag);
@@ -879,6 +911,8 @@ leo_agent_t *leo_agent_start(const char *config_path) {
     if (pthread_create(&ag->heartbeat_thread, NULL, _heartbeat_thread, ag) != 0) {
         LOG_FATAL("Impossible de créer le thread heartbeat");
         leo_metrics_destroy();
+        pthread_cond_destroy(&ag->wake_cond);
+        pthread_mutex_destroy(&ag->wake_mutex);
         pthread_cond_destroy(&ag->exec_cond);
         pthread_mutex_destroy(&ag->exec_mutex);
         /* Si leo_conn_destroy() n'a pas pu joindre le thread WSS (conn->config
@@ -890,9 +924,14 @@ leo_agent_t *leo_agent_start(const char *config_path) {
 
     if (pthread_create(&ag->metrics_thread, NULL, _metrics_thread, ag) != 0) {
         LOG_FATAL("Impossible de créer le thread métriques");
+        pthread_mutex_lock(&ag->wake_mutex);
         ag->threads_stop = true;
+        pthread_cond_broadcast(&ag->wake_cond);
+        pthread_mutex_unlock(&ag->wake_mutex);
         pthread_join(ag->heartbeat_thread, NULL);
         leo_metrics_destroy();
+        pthread_cond_destroy(&ag->wake_cond);
+        pthread_mutex_destroy(&ag->wake_mutex);
         pthread_cond_destroy(&ag->exec_cond);
         pthread_mutex_destroy(&ag->exec_mutex);
         /* Voir commentaire ci-dessus. */
@@ -909,8 +948,15 @@ void leo_agent_stop(leo_agent_t *ag) {
     if (!ag) return;
 
     LOG_INFO("Arrêt de l'agent…");
-    ag->state        = LEO_STATE_STOPPING;
+    ag->state = LEO_STATE_STOPPING;
+
+    /* Réveille immédiatement les threads heartbeat/métriques s'ils dorment
+     * dans _interruptible_sleep — sans ce broadcast, l'arrêt attendrait
+     * jusqu'à l'intervalle en cours (jusqu'à 3h pour le heartbeat). */
+    pthread_mutex_lock(&ag->wake_mutex);
     ag->threads_stop = true;
+    pthread_cond_broadcast(&ag->wake_cond);
+    pthread_mutex_unlock(&ag->wake_mutex);
 
     pthread_join(ag->heartbeat_thread, NULL);
     pthread_join(ag->metrics_thread,   NULL);
@@ -958,6 +1004,8 @@ void leo_agent_stop(leo_agent_t *ag) {
     }
     leo_metrics_destroy();
 
+    pthread_cond_destroy(&ag->wake_cond);
+    pthread_mutex_destroy(&ag->wake_mutex);
     pthread_cond_destroy(&ag->exec_cond);
     pthread_mutex_destroy(&ag->exec_mutex);
 

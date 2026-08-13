@@ -18,7 +18,7 @@
 #define LEO_PROTOCOL_VERSION     1
 
 #define LEO_HEARTBEAT_INTERVAL_SEC  10800   /* 3 hours for low resource consumption */
-#define LEO_METRICS_INTERVAL_SEC    60
+#define LEO_METRICS_INTERVAL_SEC    300     /* 5 minutes for low resource consumption */
 #define LEO_RECONNECT_INIT_MS     5000
 #define LEO_RECONNECT_STEP_MS     5000
 #define LEO_RECONNECT_MAX_MS     60000

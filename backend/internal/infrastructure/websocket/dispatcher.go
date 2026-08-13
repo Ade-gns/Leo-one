@@ -32,6 +32,14 @@ const (
 	msgTypePong       = 7
 )
 
+// Intervalles envoyés dans HELLO_ACK (doivent correspondre aux défauts de
+// leo_agent.h — LEO_HEARTBEAT_INTERVAL_SEC / LEO_METRICS_INTERVAL_SEC —
+// sans quoi l'agent applique la valeur serveur et écrase son propre défaut).
+const (
+	defaultHeartbeatIntervalSec = 10800
+	defaultMetricsIntervalSec   = 300
+)
+
 // helloBody est le body du message HELLO envoyé par l'agent.
 type helloBody struct {
 	AgentID      string `json:"agent_id"`
@@ -123,6 +131,15 @@ func (d *Dispatcher) SetHub(hub *Hub) {
 	d.hub = hub
 }
 
+// MarkOffline passe un agent en statut offline en BDD, sans toucher à
+// last_seen_at (qui doit continuer à refléter le dernier contact réel).
+// Appelé par Hub.Unregister à la déconnexion WS.
+func (d *Dispatcher) MarkOffline(agentID string) {
+	if err := d.agentRepo.UpdateStatus(context.TODO(), agentID, agentDomain.StatusOffline, nil); err != nil {
+		d.logger.Warn("Échec passage offline", "agent_id", agentID, "error", err)
+	}
+}
+
 // Dispatch décode l'enveloppe JSON et route vers le handler spécialisé.
 func (d *Dispatcher) Dispatch(client *Client, raw []byte) {
 	var env envelope
@@ -190,8 +207,8 @@ func (d *Dispatcher) handleHello(client *Client, env envelope, log *slog.Logger)
 		"id":   env.ID,
 		"ts":   time.Now().UnixMilli(),
 		"body": map[string]any{
-			"heartbeat_interval_sec": 30,
-			"metrics_interval_sec":   60,
+			"heartbeat_interval_sec": defaultHeartbeatIntervalSec,
+			"metrics_interval_sec":   defaultMetricsIntervalSec,
 		},
 	}
 	client.Send(ack)

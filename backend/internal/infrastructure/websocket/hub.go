@@ -63,15 +63,26 @@ func (h *Hub) Register(client *Client) {
 // client, pourtant toujours connecté.
 func (h *Hub) Unregister(client *Client) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	if current, ok := h.clients[client.AgentID]; ok && current == client {
+	current, ok := h.clients[client.AgentID]
+	wasCurrent := ok && current == client
+	if wasCurrent {
 		close(client.send)
 		delete(h.clients, client.AgentID)
-		h.logger.Info("Agent déconnecté",
-			"agent_id", client.AgentID,
-			"total_connected", len(h.clients))
 	}
+	total := len(h.clients)
+	h.mu.Unlock()
+
+	if !wasCurrent {
+		return
+	}
+
+	h.logger.Info("Agent déconnecté",
+		"agent_id", client.AgentID,
+		"total_connected", total)
+
+	// Hors verrou : appel BDD, ne doit pas bloquer Register/SendToAgent/IsConnected
+	// pendant son exécution.
+	h.dispatcher.MarkOffline(client.AgentID)
 }
 
 // HandleIncoming reçoit un message brut d'un client et le passe au Dispatcher.
