@@ -20,6 +20,7 @@ set(AGENT_COMMON_SOURCES
     src/main.c
     src/agent.c
     src/config.c
+    src/enroll.c
     src/logger.c
     src/protocol.c
     src/connection.c

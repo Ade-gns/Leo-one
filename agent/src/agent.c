@@ -11,6 +11,7 @@
 #include "agent.h"
 #include "config.h"
 #include "connection.h"
+#include "enroll.h"
 #include "metrics.h"
 #include "protocol.h"
 #include "logger.h"
@@ -871,15 +872,26 @@ leo_agent_t *leo_agent_start(const char *config_path) {
     pthread_mutex_init(&ag->wake_mutex, NULL);
     pthread_cond_init(&ag->wake_cond, NULL);
 
-    /* ── Chargement de la configuration ── */
+    /* ── Chargement de la configuration, ou enrollment si absente ──
+     * Un agent jamais enrôlé n'a pas encore d'agent.conf (agent_id/
+     * tenant_id/certificat client ne peuvent être connus qu'après l'échange
+     * avec le backend) — dans ce cas on tente l'enrollment à partir du
+     * fichier de bootstrap (token + URL API) déposé par l'installeur. */
     if (leo_config_load(config_path, &ag->config) != LEO_OK) {
-        LOG_FATAL("Impossible de charger la configuration depuis %s", config_path);
-        pthread_cond_destroy(&ag->wake_cond);
-        pthread_mutex_destroy(&ag->wake_mutex);
-        pthread_cond_destroy(&ag->exec_cond);
-        pthread_mutex_destroy(&ag->exec_mutex);
-        free(ag);
-        return NULL;
+        LOG_INFO("Configuration absente ou invalide (%s) — tentative "
+                 "d'enrollment via %s", config_path, LEO_BOOTSTRAP_FILE);
+        ag->state = LEO_STATE_ENROLLING;
+        if (leo_enroll(LEO_BOOTSTRAP_FILE, config_path, &ag->config) != LEO_OK) {
+            LOG_FATAL("Enrollment échoué — impossible de démarrer l'agent "
+                      "(vérifiez %s : enrollment_token/api_endpoint)", LEO_BOOTSTRAP_FILE);
+            pthread_cond_destroy(&ag->wake_cond);
+            pthread_mutex_destroy(&ag->wake_mutex);
+            pthread_cond_destroy(&ag->exec_cond);
+            pthread_mutex_destroy(&ag->exec_mutex);
+            free(ag);
+            return NULL;
+        }
+        ag->state = LEO_STATE_INIT;
     }
 
     /* ── Initialisation du sous-système métriques ── */

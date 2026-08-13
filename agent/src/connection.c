@@ -21,6 +21,7 @@
 #include "connection.h"
 #include "logger.h"
 #include "crypto.h"
+#include "protocol.h"
 
 #include <libwebsockets.h>
 #include <openssl/x509.h>
@@ -58,6 +59,17 @@ struct leo_conn {
     /* État */
     volatile bool    connected;
     volatile bool    should_stop;
+    /* Distinct de `!connected` : celui-ci ne devient vrai que sur un échec
+     * ou une fermeture effective (callbacks CONNECTION_ERROR/CLOSED), pas
+     * pendant la poignée de main TLS — voir _lws_thread : `!connected` seul
+     * est aussi vrai *avant* que la connexion soit établie (wsi pas encore
+     * assigné), ce qui faisait sortir la boucle événementielle dès le
+     * premier lws_service() de chaque tentative, avant même la fin de la
+     * poignée de main mTLS (qui prend plusieurs passages non-bloquants).
+     * Résultat observé : reconnexion en boucle sans jamais aboutir dès que
+     * le serveur exige mTLS (poignée de main trop lente pour un seul
+     * lws_service(ctx, 50)). */
+    volatile bool    attempt_failed;
     int              reconnect_delay_ms;
 
     /* Thread LWS */
@@ -83,15 +95,31 @@ static int _lws_callback(struct lws *wsi, enum lws_callback_reasons reason,
 
     switch (reason) {
 
-    case LWS_CALLBACK_CLIENT_ESTABLISHED:
+    case LWS_CALLBACK_CLIENT_ESTABLISHED: {
         conn->wsi       = wsi;
         conn->connected = true;
         conn->reconnect_delay_ms = LEO_RECONNECT_INIT_MS;
         LOG_INFO("WSS connecté à %s:%d%s", conn->host, conn->port, conn->path);
 
-        /* Déclenche l'envoi du message HELLO via WRITEABLE */
+        /* Premier message de la session : identifie l'agent au backend
+         * (voir Dispatcher.handleHello côté Go) — c'est ce qui fait passer
+         * l'agent à l'état "online" ; sans lui, le statut ne changerait
+         * qu'au premier heartbeat (jusqu'à 3h plus tard avec l'intervalle
+         * par défaut actuel). */
+        char hello_buf[LEO_MAX_MSG_SIZE];
+        int  hello_len = leo_proto_build_hello(conn->config, hello_buf, sizeof(hello_buf));
+        if (hello_len > 0) {
+            leo_conn_send(conn, hello_buf, (size_t)hello_len);
+        } else {
+            LOG_ERROR("Échec de construction du message HELLO");
+        }
+
+        /* Sûr ici (thread LWS) : arme WRITEABLE pour ce wsi directement.
+         * Voir LWS_CALLBACK_EVENT_WAIT_CANCELLED plus bas pour le cas
+         * général (message mis en file depuis un AUTRE thread). */
         lws_callback_on_writable(wsi);
         break;
+    }
 
     case LWS_CALLBACK_CLIENT_RECEIVE:
         if (in && len > 0 && conn->handler) {
@@ -131,10 +159,32 @@ static int _lws_callback(struct lws *wsi, enum lws_callback_reasons reason,
         pthread_mutex_unlock(&conn->queue_mutex);
         break;
 
+    case LWS_CALLBACK_EVENT_WAIT_CANCELLED:
+        /* Réveillé par lws_cancel_service() (voir leo_conn_send(), appelé
+         * depuis d'autres threads — heartbeat/métriques/exécution de
+         * commandes). Ce callback s'exécute sur le thread LWS lui-même :
+         * c'est le SEUL endroit sûr pour armer WRITEABLE en réponse à un
+         * message mis en file par un thread étranger — lws_cancel_service()
+         * seul ne fait que réveiller poll(), il ne (re)programme pas
+         * l'intérêt POLLOUT du socket (lws_callback_on_writable modifie la
+         * table de poll fds, ce qui n'est pas thread-safe hors du thread
+         * LWS). Sans ce relais, un message enqueué après l'établissement de
+         * la connexion ne serait jamais transmis. */
+        pthread_mutex_lock(&conn->queue_mutex);
+        {
+            bool has_pending = conn->queue_count > 0;
+            pthread_mutex_unlock(&conn->queue_mutex);
+            if (conn->wsi && has_pending) {
+                lws_callback_on_writable(conn->wsi);
+            }
+        }
+        break;
+
     case LWS_CALLBACK_CLIENT_CLOSED:
     case LWS_CALLBACK_CLIENT_CONNECTION_ERROR:
-        conn->connected = false;
-        conn->wsi       = NULL;
+        conn->connected      = false;
+        conn->wsi            = NULL;
+        conn->attempt_failed = true;
         if (reason == LWS_CALLBACK_CLIENT_CONNECTION_ERROR) {
             LOG_ERROR("Erreur de connexion WSS : %s",
                       in ? (const char *)in : "(inconnue)");
@@ -247,6 +297,8 @@ static void *_lws_thread(void *arg) {
          * seule autorité de validation du certificat serveur. */
         ci.ssl_connection = LCCSCF_USE_SSL;
 
+        conn->attempt_failed = false;
+
         struct lws *wsi = lws_client_connect_via_info(&ci);
         if (!wsi) {
             LOG_ERROR("lws_client_connect_via_info a échoué");
@@ -262,8 +314,10 @@ static void *_lws_thread(void *arg) {
         while (!conn->should_stop) {
             if (lws_service(conn->lws_ctx, 50) < 0) break;
 
-            /* Si déconnecté, sortir pour reconnecter */
-            if (!conn->connected && conn->wsi == NULL) break;
+            /* Sortir pour reconnecter seulement sur échec/fermeture avérés
+             * (voir attempt_failed) — pas simplement "pas encore connecté",
+             * qui est aussi vrai en plein milieu de la poignée de main. */
+            if (conn->attempt_failed) break;
         }
 
         lws_context_destroy(conn->lws_ctx);
