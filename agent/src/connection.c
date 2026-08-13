@@ -148,10 +148,32 @@ static int _lws_callback(struct lws *wsi, enum lws_callback_reasons reason,
          * (preverify_ok, dans `len`) et on n'accepte que si le certificat
          * présenté correspond exactement à l'empreinte SHA-256 épinglée
          * dans la config. C'est la vérification serveur — indispensable,
-         * sinon n'importe quel serveur (attaquant MITM inclus) est accepté. */
-        X509_STORE_CTX *store_ctx  = (X509_STORE_CTX *)user;
-        X509           *peer_cert  = store_ctx ? X509_STORE_CTX_get_current_cert(store_ctx) : NULL;
-        const char     *expected_fp = conn->config ? conn->config->ca_fingerprint : NULL;
+         * sinon n'importe quel serveur (attaquant MITM inclus) est accepté.
+         *
+         * OpenSSL invoque ce callback UNE FOIS PAR CERTIFICAT de la chaîne
+         * présentée (profondeur decroissante jusqu'à la feuille, profondeur
+         * 0). Si le serveur envoie plus qu'un unique certificat auto-signé
+         * (ex: feuille + CA intermédiaire), comparer l'empreinte épinglée à
+         * CHAQUE profondeur rejetterait la poignée de main dès qu'un
+         * certificat intermédiaire ne correspond pas — même si la feuille,
+         * seule chose qui nous intéresse ici, correspond bien. On ne juge
+         * donc que la profondeur 0 (la feuille) ; les autres profondeurs
+         * sont acceptées sans vérification, la décision réelle étant prise
+         * une fois la profondeur 0 atteinte. */
+        X509_STORE_CTX *store_ctx = (X509_STORE_CTX *)user;
+        if (!store_ctx) {
+            LOG_ERROR("Certificat serveur rejeté — contexte de vérification absent");
+            return 1;
+        }
+
+        if (X509_STORE_CTX_get_error_depth(store_ctx) != 0) {
+            /* Certificat intermédiaire/CA : pas notre feuille, pas de
+             * décision de pinning à prendre ici. */
+            return 0;
+        }
+
+        X509       *peer_cert   = X509_STORE_CTX_get_current_cert(store_ctx);
+        const char *expected_fp = conn->config ? conn->config->ca_fingerprint : NULL;
 
         if (peer_cert && expected_fp &&
             leo_crypto_x509_fingerprint_matches(peer_cert, expected_fp)) {
@@ -386,8 +408,8 @@ bool leo_conn_is_connected(const leo_conn_t *conn) {
     return conn && conn->connected;
 }
 
-void leo_conn_destroy(leo_conn_t *conn) {
-    if (!conn) return;
+bool leo_conn_destroy(leo_conn_t *conn) {
+    if (!conn) return true;
 
     conn->should_stop = true;
 
@@ -397,18 +419,23 @@ void leo_conn_destroy(leo_conn_t *conn) {
     /* Attendre le thread (max 5s). Si le thread ne répond pas (ex: bloqué
      * dans une résolution DNS), on NE détruit PAS le mutex ni ne libère
      * conn : le thread continuerait à y accéder après coup (use-after-free).
-     * On accepte une fuite plutôt qu'un crash / UB dans ce cas rare. */
+     * On accepte une fuite plutôt qu'un crash / UB dans ce cas rare — et on
+     * le SIGNALE à l'appelant (valeur de retour) : conn->config pointe vers
+     * de la mémoire non-owned (ex: le leo_config_t d'un leo_agent_t) que le
+     * thread encore actif va continuer à déréférencer, donc l'appelant ne
+     * doit surtout pas libérer cette mémoire tant que le process tourne. */
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
     ts.tv_sec += 5;
     if (pthread_timedjoin_np(conn->thread, NULL, &ts) != 0) {
         LOG_ERROR("Thread WSS non joignable après 5s — abandon (fuite volontaire, "
                   "évite un use-after-free si le thread est encore actif)");
-        return;
+        return false;
     }
 
     pthread_mutex_destroy(&conn->queue_mutex);
 
     LOG_INFO("Connexion WSS libérée");
     free(conn);
+    return true;
 }

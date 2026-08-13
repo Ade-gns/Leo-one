@@ -140,6 +140,21 @@ leo_error_t leo_config_save(const char *path, const leo_config_t *cfg) {
 
 bool leo_config_is_valid(const leo_config_t *cfg) {
     if (!cfg) return false;
+
+    /* ca_fingerprint doit faire exactement 64 caractères hex (SHA-256) : la
+     * vérification stricte du certificat serveur (connection.c,
+     * LWS_CALLBACK_OPENSSL_PERFORM_SERVER_CERT_VERIFICATION) rejette toute
+     * connexion si ce champ est vide ou mal formé, sans jamais réussir à se
+     * connecter — mieux vaut échouer tôt et explicitement ici (config
+     * invalide au démarrage) qu'échouer silencieusement à chaque tentative
+     * de reconnexion avec un seul LOG_ERROR répété. */
+    if (strlen(cfg->ca_fingerprint) != 64) {
+        LOG_ERROR("Configuration invalide : ca_fingerprint absent ou malformé "
+                  "(longueur %zu, attendu 64) — le pinning TLS échouera à "
+                  "chaque connexion", strlen(cfg->ca_fingerprint));
+        return false;
+    }
+
     return cfg->agent_id[0] != '\0'
         && cfg->tenant_id[0] != '\0'
         && cfg->ws_endpoint[0] != '\0';

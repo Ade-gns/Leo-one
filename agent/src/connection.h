@@ -52,7 +52,15 @@ bool leo_conn_is_connected(const leo_conn_t *conn);
 /**
  * Demande l'arrêt propre de la connexion et libère les ressources.
  * Bloquant : attend que le thread LWS se termine (max 5s).
+ *
+ * @return true si conn a été détruit et libéré. false si le thread LWS n'a
+ *         pas rejoint dans le délai : conn est délibérément ABANDONNÉ (fuite
+ *         volontaire, non libéré, non NULL-able par l'appelant) plutôt que
+ *         libéré pendant qu'un thread encore actif pourrait y accéder
+ *         (use-after-free). Dans ce cas, l'appelant NE DOIT PAS libérer
+ *         de mémoire dont conn garde une référence non-owning (ex: le
+ *         leo_config_t passé à leo_conn_create) tant que le process tourne.
  */
-void leo_conn_destroy(leo_conn_t *conn);
+bool leo_conn_destroy(leo_conn_t *conn);
 
 #endif /* LEO_CONNECTION_H */

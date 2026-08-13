@@ -306,6 +306,26 @@ static void _launch_exec(leo_agent_t *ag, const char *cmd_id,
 }
 
 /**
+ * Convertit un cJSON number (double) en int en bornant AVANT le cast.
+ * Un champ numérique venant du backend peut contenir n'importe quelle
+ * valeur JSON (ex: 1e300) — caster un double hors de portée d'un int est un
+ * comportement indéfini en C (pas juste une troncature "surprenante"), donc
+ * le bornage doit avoir lieu sur le double, avant le cast, pas après.
+ * NaN est également géré explicitement : "v < lo" et "v > hi" valent tous
+ * deux false pour NaN (aucune comparaison n'est vraie avec NaN), donc sans
+ * ce test le code tomberait jusqu'au cast (int)NaN — également UB. cJSON
+ * ne produit normalement pas NaN depuis un nombre JSON valide (strtod ne
+ * génère pas NaN à partir d'une syntaxe décimale), mais on ne dépend pas de
+ * cette garantie pour éviter l'UB dans ce helper partagé.
+ */
+static int _json_number_clamped(double v, int lo, int hi) {
+    if (v != v) return lo;  /* NaN */
+    if (v < (double)lo) return lo;
+    if (v > (double)hi) return hi;
+    return (int)v;
+}
+
+/**
  * Dispatch d'une commande EXEC_SCRIPT : script arbitraire fourni par le
  * backend, exécuté tel quel via _launch_exec().
  */
@@ -321,7 +341,7 @@ static void _dispatch_exec_script(leo_agent_t *ag, const char *cmd_id, cJSON *bo
         if (cJSON_IsString(ji)) interpreter = ji->valuestring;
         if (cJSON_IsString(js)) script      = js->valuestring;
         if (cJSON_IsNumber(jt) && jt->valuedouble > 0)
-            timeout_secs = (int)jt->valuedouble;
+            timeout_secs = _json_number_clamped(jt->valuedouble, 1, LEO_EXEC_MAX_TIMEOUT_SEC);
     }
 
     if (!interpreter || !script) {
@@ -392,7 +412,7 @@ static void _dispatch_install_pkg(leo_agent_t *ag, const char *cmd_id, cJSON *bo
             names[n++] = jpkg->valuestring;
         }
         if (cJSON_IsNumber(jt) && jt->valuedouble > 0)
-            timeout_secs = (int)jt->valuedouble;
+            timeout_secs = _json_number_clamped(jt->valuedouble, 1, LEO_EXEC_MAX_TIMEOUT_SEC);
     }
 
     if (n == 0) {
@@ -407,6 +427,7 @@ static void _dispatch_install_pkg(leo_agent_t *ag, const char *cmd_id, cJSON *bo
      * fixe. "--" arrête l'analyse d'options : un nom de paquet ne peut donc
      * pas être interprété comme un flag d'apt-get même s'il commence par
      * '-' (le charset autorisé par _pkg_name_valid le permettrait). */
+    static const char REDIRECT_SUFFIX[] = " 2>&1";
     char script[512] =
         "export DEBIAN_FRONTEND=noninteractive\n"
         "apt-get update -qq && apt-get install -y --no-install-recommends -- ";
@@ -421,8 +442,12 @@ static void _dispatch_install_pkg(leo_agent_t *ag, const char *cmd_id, cJSON *bo
             return;
         }
         size_t plen = strlen(names[i]);
-        /* +2 pour l'espace séparateur et le terminateur nul. */
-        if (off + plen + 2 >= sizeof(script)) {
+        /* +2 pour l'espace séparateur et le terminateur nul, + la marge pour
+         * REDIRECT_SUFFIX ajouté après la boucle : sans cette marge,
+         * strncat() pouvait tronquer " 2>&1" en un fragment partiel (ex:
+         * juste "2") qui, placé après "--", serait lu par apt-get comme un
+         * nom de paquet supplémentaire au lieu d'une redirection shell. */
+        if (off + plen + 2 + (sizeof(REDIRECT_SUFFIX) - 1) >= sizeof(script)) {
             LOG_WARN("INSTALL_PKG : trop de paquets pour le buffer de script (cmd_id=%s)", cmd_id);
             wlen = leo_proto_build_cmd_result(cmd_id, -1, "",
                        "Requête invalide : trop de paquets", buf, sizeof(buf));
@@ -434,7 +459,9 @@ static void _dispatch_install_pkg(leo_agent_t *ag, const char *cmd_id, cJSON *bo
         off += plen;
     }
     script[off] = '\0';
-    strncat(script, " 2>&1", sizeof(script) - strlen(script) - 1);
+    /* La marge réservée ci-dessus garantit que REDIRECT_SUFFIX entier tient
+     * toujours — pas de troncature possible ici. */
+    strncat(script, REDIRECT_SUFFIX, sizeof(script) - strlen(script) - 1);
 
     _launch_exec(ag, cmd_id, "sh", script, timeout_secs);
 }
@@ -461,8 +488,10 @@ static void _dispatch_reboot(leo_agent_t *ag, const char *cmd_id, cJSON *body) {
     if (body) {
         cJSON *jd = cJSON_GetObjectItemCaseSensitive(body, "delay_sec");
         if (cJSON_IsNumber(jd) && jd->valuedouble >= 0)
-            delay_sec = (int)jd->valuedouble;
+            delay_sec = _json_number_clamped(jd->valuedouble, 0, LEO_REBOOT_MAX_DELAY_SEC);
     }
+    /* Bornage déjà appliqué ci-dessus (avant le cast) — cette ligne reste en
+     * défense en profondeur si delay_sec venait à être fixé autrement. */
     if (delay_sec > LEO_REBOOT_MAX_DELAY_SEC)
         delay_sec = LEO_REBOOT_MAX_DELAY_SEC;
 
@@ -611,9 +640,9 @@ static void _on_message(const char *json_str, size_t len, void *userdata) {
             cJSON *jhi = cJSON_GetObjectItemCaseSensitive(msg.body, "heartbeat_interval_sec");
             cJSON *jmi = cJSON_GetObjectItemCaseSensitive(msg.body, "metrics_interval_sec");
             if (cJSON_IsNumber(jhi) && jhi->valuedouble > 0)
-                ag->config.heartbeat_interval_sec = (int)jhi->valuedouble;
+                ag->config.heartbeat_interval_sec = _json_number_clamped(jhi->valuedouble, 1, 86400);
             if (cJSON_IsNumber(jmi) && jmi->valuedouble > 0)
-                ag->config.metrics_interval_sec = (int)jmi->valuedouble;
+                ag->config.metrics_interval_sec = _json_number_clamped(jmi->valuedouble, 1, 86400);
         }
         break;
 
@@ -648,7 +677,7 @@ static void _on_message(const char *json_str, size_t len, void *userdata) {
         if (msg.body) {
             cJSON *jmi = cJSON_GetObjectItemCaseSensitive(msg.body, "metrics_interval_sec");
             if (cJSON_IsNumber(jmi) && jmi->valuedouble > 0) {
-                ag->config.metrics_interval_sec = (int)jmi->valuedouble;
+                ag->config.metrics_interval_sec = _json_number_clamped(jmi->valuedouble, 1, 86400);
                 LOG_INFO("Intervalle métriques mis à jour : %ds",
                          ag->config.metrics_interval_sec);
             }
@@ -709,11 +738,13 @@ leo_agent_t *leo_agent_start(const char *config_path) {
     /* ── Lancement des threads ── */
     if (pthread_create(&ag->heartbeat_thread, NULL, _heartbeat_thread, ag) != 0) {
         LOG_FATAL("Impossible de créer le thread heartbeat");
-        leo_conn_destroy(ag->conn);
         leo_metrics_destroy();
         pthread_cond_destroy(&ag->exec_cond);
         pthread_mutex_destroy(&ag->exec_mutex);
-        free(ag);
+        /* Si leo_conn_destroy() n'a pas pu joindre le thread WSS (conn->config
+         * pointe vers ag->config), on abandonne ag SANS le libérer : un
+         * free(ag) ici serait un use-after-free pour ce thread encore actif. */
+        if (leo_conn_destroy(ag->conn)) free(ag);
         return NULL;
     }
 
@@ -721,11 +752,11 @@ leo_agent_t *leo_agent_start(const char *config_path) {
         LOG_FATAL("Impossible de créer le thread métriques");
         ag->threads_stop = true;
         pthread_join(ag->heartbeat_thread, NULL);
-        leo_conn_destroy(ag->conn);
         leo_metrics_destroy();
         pthread_cond_destroy(&ag->exec_cond);
         pthread_mutex_destroy(&ag->exec_mutex);
-        free(ag);
+        /* Voir commentaire ci-dessus. */
+        if (leo_conn_destroy(ag->conn)) free(ag);
         return NULL;
     }
 
@@ -774,7 +805,17 @@ void leo_agent_stop(leo_agent_t *ag) {
     }
     pthread_mutex_unlock(&ag->exec_mutex);
 
-    leo_conn_destroy(ag->conn);
+    /* leo_conn_destroy() peut abandonner (return false) si le thread WSS ne
+     * rejoint pas dans son délai — dans ce cas conn (et le thread encore
+     * actif) survivent délibérément, et conn->config pointe toujours vers
+     * ag->config : libérer ag ci-dessous serait alors un use-after-free pour
+     * ce thread. On abandonne tout l'arrêt plutôt que de libérer ag. */
+    if (!leo_conn_destroy(ag->conn)) {
+        LOG_ERROR("Connexion WSS non détruite proprement — abandon de l'arrêt "
+                  "(fuite volontaire de l'agent entier, évite un "
+                  "use-after-free sur ag->config depuis le thread WSS encore actif)");
+        return;
+    }
     leo_metrics_destroy();
 
     pthread_cond_destroy(&ag->exec_cond);
