@@ -20,7 +20,7 @@ type Dependencies struct {
 	InventoryHandler  *handlers.InventoryHandler
 	AlertHandler      *handlers.AlertHandler
 	TicketHandler     *handlers.StubHandler
-	WorkspaceHandler  *handlers.StubHandler
+	WorkspaceHandler  *handlers.WorkspaceHandler
 	UserHandler       *handlers.UserHandler
 	RoleHandler       *handlers.RoleHandler
 	TenantHandler     *handlers.StubHandler

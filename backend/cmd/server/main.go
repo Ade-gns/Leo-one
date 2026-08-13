@@ -122,6 +122,7 @@ func main() {
 	alertRepo := postgres.NewAlertRepo(pool)
 	inventoryRepo := postgres.NewInventoryRepo(pool)
 	userRepo := postgres.NewUserRepo(pool)
+	workspaceRepo := postgres.NewWorkspaceRepo(pool)
 
 	// WebSocket
 	dispatcher := websocket.NewDispatcher(agentRepo, metricRepo, inventoryRepo, pool, log)
@@ -143,6 +144,7 @@ func main() {
 	enrollmentHandler := handlers.NewEnrollmentHandler(pool)
 	userHandler := handlers.NewUserHandler(userRepo)
 	roleHandler := handlers.NewRoleHandler(pool)
+	workspaceHandler := handlers.NewWorkspaceHandler(workspaceRepo)
 	stubHandler := &handlers.StubHandler{}
 
 	// Routeur API REST (Chi)
@@ -154,7 +156,7 @@ func main() {
 		InventoryHandler:  inventoryHandler,
 		AlertHandler:      alertHandler,
 		TicketHandler:     stubHandler,
-		WorkspaceHandler:  stubHandler,
+		WorkspaceHandler:  workspaceHandler,
 		UserHandler:       userHandler,
 		RoleHandler:       roleHandler,
 		TenantHandler:     stubHandler,

@@ -9,6 +9,7 @@ import {
   Ticket,
   Settings,
   Users,
+  Boxes,
   ChevronLeft,
   ChevronRight,
   Shield,
@@ -26,6 +27,7 @@ interface NavItem {
 const NAV_ITEMS: NavItem[] = [
   { label: 'Tableau de bord', to: '/',        icon: LayoutDashboard },
   { label: 'Machines',        to: '/agents',  icon: Monitor         },
+  { label: 'Workspaces',      to: '/workspaces', icon: Boxes        },
   { label: 'Alertes',         to: '/alerts',  icon: Bell            },
   { label: 'Tickets',         to: '/tickets', icon: Ticket          },
   { label: 'Utilisateurs',    to: '/users',   icon: Users           },
