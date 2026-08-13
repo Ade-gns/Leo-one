@@ -46,6 +46,7 @@ struct leo_agent {
     pthread_t             heartbeat_thread;
     pthread_t             metrics_thread;
     volatile bool         threads_stop;
+    volatile bool         force_heartbeat_pending;  /* Set by FORCE_HEARTBEAT msg */
 
     /* Exécution de scripts (threads détachés, un par commande EXEC_SCRIPT) */
     pthread_mutex_t        exec_mutex;
@@ -125,6 +126,13 @@ static void *_heartbeat_thread(void *arg) {
     while (!ag->threads_stop) {
         _interruptible_sleep(ag, ag->config.heartbeat_interval_sec);
         if (ag->threads_stop) break;
+
+        /* Check if forced heartbeat was requested */
+        bool force = ag->force_heartbeat_pending;
+        if (force) {
+            ag->force_heartbeat_pending = false;
+            LOG_DEBUG("Forced heartbeat triggered");
+        }
 
         if (!leo_conn_is_connected(ag->conn)) {
             LOG_DEBUG("Heartbeat ignoré — pas connecté");
@@ -797,6 +805,11 @@ static void _on_message(const char *json_str, size_t len, void *userdata) {
     case LEO_MSG_COLLECT_INVENTORY:
         LOG_INFO("Demande d'inventaire reçue (cmd_id=%s)", msg.id);
         _dispatch_collect_inventory(ag, msg.id);
+        break;
+
+    case LEO_MSG_FORCE_HEARTBEAT:
+        LOG_INFO("Force heartbeat reçue du serveur");
+        ag->force_heartbeat_pending = true;
         break;
 
     case LEO_MSG_CONFIG_UPDATE:

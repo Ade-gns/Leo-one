@@ -3,17 +3,19 @@
  */
 import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { ChevronLeft, Terminal, RefreshCw, AlertCircle } from 'lucide-react'
+import { ChevronLeft, Terminal, Package, RefreshCw, AlertCircle } from 'lucide-react'
 import { useAgent } from '@/hooks/useAgents'
-import { AgentStatusBadge }  from '@/components/agents/AgentStatusBadge'
-import { AgentDetailPanel }  from '@/components/agents/AgentDetailPanel'
-import { AgentCommandModal } from '@/components/agents/AgentCommandModal'
-import { MetricsGrid }       from '@/components/metrics/MetricsGrid'
+import { AgentStatusBadge }    from '@/components/agents/AgentStatusBadge'
+import { AgentDetailPanel }    from '@/components/agents/AgentDetailPanel'
+import { AgentCommandModal }   from '@/components/agents/AgentCommandModal'
+import { AgentInstallPkgModal } from '@/components/agents/AgentInstallPkgModal'
+import { MetricsGrid }         from '@/components/metrics/MetricsGrid'
 
 export default function AgentDetailPage() {
   const { agentId }     = useParams<{ agentId: string }>()
   const navigate        = useNavigate()
-  const [showModal, setShowModal] = useState(false)
+  const [showModal, setShowModal]          = useState(false)
+  const [showInstallModal, setShowInstallModal] = useState(false)
 
   const { data, isLoading, isError, refetch } = useAgent(agentId!)
 
@@ -71,6 +73,14 @@ export default function AgentDetailPage() {
             <RefreshCw className="h-4 w-4" />
           </button>
           <button
+            onClick={() => setShowInstallModal(true)}
+            disabled={agent.status !== 'online'}
+            className="flex items-center gap-2 rounded-lg border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Package className="h-4 w-4" />
+            Installer un paquet
+          </button>
+          <button
             onClick={() => setShowModal(true)}
             disabled={agent.status !== 'online'}
             className="flex items-center gap-2 rounded-lg bg-brand-900 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -101,6 +111,15 @@ export default function AgentDetailPage() {
           agentId={agent.id}
           hostname={agent.hostname}
           onClose={() => setShowModal(false)}
+        />
+      )}
+
+      {/* Modal installation de paquet */}
+      {showInstallModal && (
+        <AgentInstallPkgModal
+          agentId={agent.id}
+          hostname={agent.hostname}
+          onClose={() => setShowInstallModal(false)}
         />
       )}
     </div>

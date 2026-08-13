@@ -17,7 +17,7 @@
 #define LEO_AGENT_VERSION        "1.0.0"
 #define LEO_PROTOCOL_VERSION     1
 
-#define LEO_HEARTBEAT_INTERVAL_SEC  30
+#define LEO_HEARTBEAT_INTERVAL_SEC  10800   /* 3 hours for low resource consumption */
 #define LEO_METRICS_INTERVAL_SEC    60
 #define LEO_RECONNECT_INIT_MS     5000
 #define LEO_RECONNECT_STEP_MS     5000
@@ -66,6 +66,7 @@ typedef enum {
     LEO_MSG_COLLECT_INVENTORY  = 104,
     LEO_MSG_PING               = 105,
     LEO_MSG_CONFIG_UPDATE      = 106,
+    LEO_MSG_FORCE_HEARTBEAT    = 107,   /* backend→agent : force immediate heartbeat */
     /* Sentinel */
     LEO_MSG_UNKNOWN            =  -1
 } leo_msg_type_t;

@@ -42,9 +42,19 @@ export interface Command {
 }
 
 export interface ExecScriptPayload {
-  interpreter:  'powershell' | 'bash' | 'cmd' | 'python'
-  script:       string
-  timeout_secs: number
+  interpreter: 'powershell' | 'bash' | 'cmd' | 'python'
+  script:      string
+  // Nom de champ singulier — doit correspondre exactement à ce que lit
+  // l'agent C (cJSON_GetObjectItemCaseSensitive(body, "timeout_sec"), voir
+  // agent/src/agent.c _dispatch_exec_script). Avec "timeout_secs" (pluriel),
+  // l'agent ne trouve jamais le champ et retombe silencieusement sur son
+  // défaut de 300s, quoi que l'utilisateur ait saisi dans l'UI.
+  timeout_sec: number
+}
+
+export interface InstallPkgPayload {
+  packages:    string[]
+  timeout_sec?: number
 }
 
 export interface HardwareInventory {
@@ -54,6 +64,7 @@ export interface HardwareInventory {
   cpu_cores?:       number
   cpu_threads?:     number
   ram_total_bytes?: number
+  disk_count?:      number
   bios_version?:    string
   bios_vendor?:     string
   motherboard?:     string

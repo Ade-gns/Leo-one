@@ -5,9 +5,7 @@ import { useState } from 'react'
 import { Cpu, HardDrive, Package, FileText } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 import { fr } from 'date-fns/locale'
-import { useHardwareInventory } from '@/hooks/useAgents'
-import { useQuery } from '@tanstack/react-query'
-import { agentsApi } from '@/api/agents'
+import { useHardwareInventory, useSoftwareInventory } from '@/hooks/useAgents'
 import { formatBytes } from '@/lib/utils'
 import { cn } from '@/lib/utils'
 import type { Agent } from '@/types/agent'
@@ -31,11 +29,7 @@ export function AgentDetailPanel({ agent }: AgentDetailPanelProps) {
   const [tab, setTab] = useState<Tab>('hardware')
 
   const { data: hwResp, isLoading: hwLoading } = useHardwareInventory(agent.id)
-  const { data: swResp, isLoading: swLoading } = useQuery({
-    queryKey: ['agents', agent.id, 'software'],
-    queryFn:  () => agentsApi.getSoftwareInventory(agent.id),
-    enabled:  tab === 'software',
-  })
+  const { data: swResp, isLoading: swLoading } = useSoftwareInventory(agent.id, { enabled: tab === 'software' })
 
   const hw = hwResp?.data
   const sw = swResp?.data ?? []
@@ -93,6 +87,7 @@ export function AgentDetailPanel({ agent }: AgentDetailPanelProps) {
                       <HardDrive className="h-3.5 w-3.5" /> Mémoire
                     </div>
                     <InfoRow label="RAM totale"  value={hw.ram_total_bytes ? formatBytes(hw.ram_total_bytes) : undefined} />
+                    <InfoRow label="Disques"     value={hw.disk_count} />
                     <InfoRow label="Carte mère"  value={hw.motherboard} />
                     <InfoRow label="BIOS"        value={hw.bios_version} />
                     <InfoRow label="N° série"    value={hw.serial_number} />

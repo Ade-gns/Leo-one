@@ -2,7 +2,7 @@ import { get, post, patch, del } from './client'
 import type { ApiResponse, PaginationParams } from '@/types/api'
 import type {
   Agent, AgentListFilter, Command,
-  ExecScriptPayload, HardwareInventory, SoftwareItem,
+  ExecScriptPayload, InstallPkgPayload, HardwareInventory, SoftwareItem,
 } from '@/types/agent'
 
 const BASE = '/api/v1/agents'
@@ -23,6 +23,12 @@ export const agentsApi = {
   execScript: (agentID: string, payload: ExecScriptPayload) =>
     post<ApiResponse<Command>>(`${BASE}/${agentID}/commands`, {
       type: 'exec_script',
+      payload,
+    }),
+
+  installPkg: (agentID: string, payload: InstallPkgPayload) =>
+    post<ApiResponse<Command>>(`${BASE}/${agentID}/commands`, {
+      type: 'install_pkg',
       payload,
     }),
 

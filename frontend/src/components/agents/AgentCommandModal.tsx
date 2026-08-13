@@ -39,7 +39,7 @@ export function AgentCommandModal({ agentId, hostname, onClose }: AgentCommandMo
   const handleRun = () => {
     if (!script.trim()) return
     setOutput(null)
-    const payload: ExecScriptPayload = { interpreter, script, timeout_secs: 60 }
+    const payload: ExecScriptPayload = { interpreter, script, timeout_sec: 60 }
     execScript.mutate(payload, {
       onSuccess: data => {
         setOutput(data.data?.stdout ?? data.data?.stderr ?? '(aucune sortie)')

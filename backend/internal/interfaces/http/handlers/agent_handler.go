@@ -473,3 +473,43 @@ func (h *AgentHandler) GetCommand(w http.ResponseWriter, r *http.Request) {
 
 	response.JSON(w, http.StatusOK, cmd)
 }
+
+// WakeUp envoie un message FORCE_HEARTBEAT à l'agent pour le réveiller immédiatement.
+//
+//	POST /api/v1/agents/:agentID/wake-up
+func (h *AgentHandler) WakeUp(w http.ResponseWriter, r *http.Request) {
+	tenantID := httpctx.TenantIDFromContext(r.Context())
+	agentID := chi.URLParam(r, "agentID")
+
+	// Vérifier que l'agent appartient au tenant
+	agent, err := h.agentRepo.FindByID(r.Context(), tenantID, agentID)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		response.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "erreur de base de données")
+		return
+	}
+	if agent == nil {
+		response.Error(w, http.StatusNotFound, "NOT_FOUND", "agent introuvable")
+		return
+	}
+
+	// Envoyer le message FORCE_HEARTBEAT (type 107) si l'agent est connecté
+	// FORCE_HEARTBEAT body est vide
+	wakeupMsg := map[string]any{
+		"v":    1,
+		"type": 107, // LEO_MSG_FORCE_HEARTBEAT
+		"id":   uuid.New().String(),
+		"ts":   time.Now().UnixMilli(),
+		"body": map[string]any{},
+	}
+
+	agentOnline := h.hub.IsConnected(agentID)
+	if agentOnline {
+		h.hub.SendToAgent(agentID, wakeupMsg)
+	}
+
+	response.JSON(w, http.StatusOK, map[string]any{
+		"status":  "sent",
+		"message": "Wake-up signal envoyé à l'agent",
+		"online":  agentOnline,
+	})
+}

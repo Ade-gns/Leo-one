@@ -4,7 +4,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { agentsApi } from '@/api/agents'
 import type { AgentListFilter } from '@/types/agent'
-import type { ExecScriptPayload } from '@/types/agent'
+import type { ExecScriptPayload, InstallPkgPayload } from '@/types/agent'
 
 export const agentKeys = {
   all:     ['agents'] as const,
@@ -45,6 +45,22 @@ export function useExecScript(agentID: string) {
   })
 }
 
+/** Mutation : installation d'un ou plusieurs paquets sur un agent */
+export function useInstallPkg(agentID: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (payload: InstallPkgPayload) => agentsApi.installPkg(agentID, payload),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: agentKeys.commands(agentID) })
+      // L'installation peut changer la liste des logiciels installés —
+      // invalider pour que l'onglet Logiciels se resynchronise si l'agent
+      // renvoie un COLLECT_INVENTORY après coup (pas automatique aujourd'hui,
+      // mais évite d'afficher une liste obsolète si l'utilisateur la rouvre).
+      qc.invalidateQueries({ queryKey: agentKeys.sw(agentID) })
+    },
+  })
+}
+
 /** Historique des commandes d'un agent */
 export function useAgentCommands(agentID: string) {
   return useQuery({
@@ -62,6 +78,16 @@ export function useHardwareInventory(agentID: string) {
     queryFn:  () => agentsApi.getHardwareInventory(agentID),
     enabled:  !!agentID,
     staleTime: 5 * 60_000,  /* 5 min — l'inventaire HW change rarement */
+  })
+}
+
+/** Inventaire logiciel */
+export function useSoftwareInventory(agentID: string, opts?: { enabled?: boolean; search?: string }) {
+  return useQuery({
+    queryKey: agentKeys.sw(agentID),
+    queryFn:  () => agentsApi.getSoftwareInventory(agentID, opts?.search ? { search: opts.search } : undefined),
+    enabled:  !!agentID && (opts?.enabled ?? true),
+    staleTime: 60_000,
   })
 }
 
