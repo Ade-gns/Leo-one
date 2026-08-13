@@ -50,10 +50,6 @@ type refreshRequest struct {
 	RefreshToken string `json:"refresh_token"`
 }
 
-type logoutRequest struct {
-	RefreshToken string `json:"refresh_token"`
-}
-
 // ─── Handlers ─────────────────────────────────────────────────────────────────
 
 // Login authentifie un utilisateur et retourne des tokens JWT.

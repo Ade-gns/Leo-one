@@ -109,7 +109,7 @@ func (h *AlertHandler) Acknowledge(w http.ResponseWriter, r *http.Request) {
 	response.JSON(w, http.StatusOK, alert)
 }
 
-func alertStub(w http.ResponseWriter, r *http.Request) {
+func alertStub(w http.ResponseWriter, _ *http.Request) {
 	response.Error(w, http.StatusNotImplemented, "NOT_IMPLEMENTED", "alerts: non encore implémenté")
 }
 

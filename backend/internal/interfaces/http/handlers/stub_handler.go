@@ -11,7 +11,7 @@ import (
 // Il est utilisé pour les fonctionnalités non encore implémentées.
 type StubHandler struct{}
 
-func stub501(w http.ResponseWriter, r *http.Request) {
+func stub501(w http.ResponseWriter, _ *http.Request) {
 	response.Error(w, http.StatusNotImplemented, "NOT_IMPLEMENTED", "cette fonctionnalité n'est pas encore disponible")
 }
 
