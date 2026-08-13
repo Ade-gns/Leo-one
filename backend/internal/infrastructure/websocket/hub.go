@@ -9,8 +9,9 @@ import (
 // Thread-safe via RWMutex.
 //
 // Cycle de vie d'un client :
-//   AgentWSHandler.ServeHTTP → Register(client) → ReadPump + WritePump
-//   Déconnexion → ReadPump se termine → Unregister(client)
+//
+//	AgentWSHandler.ServeHTTP → Register(client) → ReadPump + WritePump
+//	Déconnexion → ReadPump se termine → Unregister(client)
 type Hub struct {
 	// clients indexés par agent_id. Protégé par mu.
 	clients map[string]*Client

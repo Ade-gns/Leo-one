@@ -2,14 +2,20 @@
 package ws
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	leoWS "github.com/yourorg/leo-one/internal/infrastructure/websocket"
+	"github.com/yourorg/leo-one/pkg/pki"
 )
 
 // upgrader configure l'upgrade HTTP → WebSocket.
@@ -26,12 +32,13 @@ var upgrader = websocket.Upgrader{
 // AgentWSHandler gère l'upgrade WebSocket et l'enregistrement des agents dans le Hub.
 type AgentWSHandler struct {
 	hub    *leoWS.Hub
+	pool   *pgxpool.Pool
 	logger *slog.Logger
 }
 
 // NewAgentWSHandler crée le handler WebSocket.
-func NewAgentWSHandler(hub *leoWS.Hub, logger *slog.Logger) *AgentWSHandler {
-	return &AgentWSHandler{hub: hub, logger: logger}
+func NewAgentWSHandler(hub *leoWS.Hub, pool *pgxpool.Pool, logger *slog.Logger) *AgentWSHandler {
+	return &AgentWSHandler{hub: hub, pool: pool, logger: logger}
 }
 
 // ServeHTTP est le point d'entrée HTTP de la route GET /ws/agent.
@@ -78,14 +85,15 @@ func (h *AgentWSHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // du certificat client présenté dans le handshake mTLS.
 //
 // Convention de nommage des certificats émis par le CA interne :
-//   CN  = agent_id (UUID v4)
-//   OU  = tenant_id (UUID v4)
-//   O   = "leo-one"
+//
+//	CN  = agent_id (UUID v4)
+//	OU  = tenant_id (UUID v4)
+//	O   = "leo-one"
 func (h *AgentWSHandler) extractIdentityFromCert(r *http.Request) (agentID, tenantID string, err error) {
 	if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
 		// En développement sans mTLS, on accepte les headers X-Agent-ID / X-Tenant-ID.
 		// JAMAIS en production.
-		agentID  = r.Header.Get("X-Agent-ID")
+		agentID = r.Header.Get("X-Agent-ID")
 		tenantID = r.Header.Get("X-Tenant-ID")
 		if agentID != "" && tenantID != "" {
 			h.logger.Warn("Authentification par header (mode dev) — désactiver en production")
@@ -95,7 +103,38 @@ func (h *AgentWSHandler) extractIdentityFromCert(r *http.Request) (agentID, tena
 	}
 
 	cert := r.TLS.PeerCertificates[0]
-	return h.parseCert(cert)
+	agentID, tenantID, err = h.parseCert(cert)
+	if err != nil {
+		return "", "", err
+	}
+	if err := h.checkNotRevoked(r.Context(), cert); err != nil {
+		return "", "", err
+	}
+	return agentID, tenantID, nil
+}
+
+// checkNotRevoked vérifie que le certificat présenté correspond bien à un
+// certificat émis à l'enrollment (agent_certificates.thumbprint) et non
+// révoqué depuis. Une signature CA valide ne suffit pas : c'est ce lookup
+// qui permet de couper l'accès d'un agent décommissionné ou compromis avant
+// l'expiration de son certificat (5 ans — voir pki.agentValidity).
+func (h *AgentWSHandler) checkNotRevoked(ctx context.Context, cert *x509.Certificate) error {
+	thumbprint := pki.Fingerprint(cert)
+
+	var revokedAt *time.Time
+	err := h.pool.QueryRow(ctx, `
+		SELECT revoked_at FROM agent_certificates WHERE thumbprint = $1
+	`, thumbprint).Scan(&revokedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return errorf("certificat inconnu (non émis par l'enrollment)")
+	}
+	if err != nil {
+		return err
+	}
+	if revokedAt != nil {
+		return errorf("certificat révoqué")
+	}
+	return nil
 }
 
 func (h *AgentWSHandler) parseCert(cert *x509.Certificate) (agentID, tenantID string, err error) {

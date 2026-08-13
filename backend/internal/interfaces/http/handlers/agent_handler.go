@@ -18,21 +18,35 @@ import (
 	leoWS "github.com/yourorg/leo-one/internal/infrastructure/websocket"
 	"github.com/yourorg/leo-one/internal/interfaces/http/httpctx"
 	"github.com/yourorg/leo-one/internal/pkg/response"
+	"github.com/yourorg/leo-one/pkg/pki"
 )
 
 // AgentHandler gère les requêtes HTTP pour les agents et les commandes.
 type AgentHandler struct {
-	agentRepo agentDomain.Repository
-	pool      *pgxpool.Pool
-	hub       *leoWS.Hub
+	agentRepo         agentDomain.Repository
+	pool              *pgxpool.Pool
+	hub               *leoWS.Hub
+	ca                *pki.CA
+	serverFingerprint string // empreinte SHA-256 du certificat du listener WSS, à épingler côté agent
+	wsEndpoint        string // wss://<host>:<port>/ws/agent, renvoyé aux agents à l'enrollment
 }
 
 // NewAgentHandler crée un AgentHandler avec ses dépendances.
-func NewAgentHandler(agentRepo agentDomain.Repository, pool *pgxpool.Pool, hub *leoWS.Hub) *AgentHandler {
+func NewAgentHandler(
+	agentRepo agentDomain.Repository,
+	pool *pgxpool.Pool,
+	hub *leoWS.Hub,
+	ca *pki.CA,
+	serverFingerprint string,
+	wsEndpoint string,
+) *AgentHandler {
 	return &AgentHandler{
-		agentRepo: agentRepo,
-		pool:      pool,
-		hub:       hub,
+		agentRepo:         agentRepo,
+		pool:              pool,
+		hub:               hub,
+		ca:                ca,
+		serverFingerprint: serverFingerprint,
+		wsEndpoint:        wsEndpoint,
 	}
 }
 
@@ -285,10 +299,35 @@ func (h *AgentHandler) Enroll(w http.ResponseWriter, r *http.Request) {
 		UPDATE enrollment_tokens SET used_at = NOW(), used_by = $1 WHERE id = $2
 	`, agentID, tok.ID)
 
+	// Certificat client mTLS de l'agent : CN=agentID, OU=tenantID, vérifiés
+	// par AgentWSHandler.parseCert à chaque connexion WSS. Sans ce certificat
+	// l'agent ne peut pas se connecter (client_ssl_cert_filepath est requis
+	// côté agent — voir agent/src/connection.c).
+	clientCertPEM, clientKeyPEM, clientCert, err := pki.IssueAgentCert(h.ca, agentID, tok.TenantID)
+	if err != nil {
+		response.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "erreur lors de l'émission du certificat agent")
+		return
+	}
+
+	// Traçabilité/révocation : voir AgentWSHandler.checkNotRevoked, qui
+	// n'autorise la connexion WSS que pour un thumbprint présent ici et non
+	// révoqué.
+	_, err = h.pool.Exec(r.Context(), `
+		INSERT INTO agent_certificates (agent_id, serial_number, thumbprint, expires_at)
+		VALUES ($1, $2, $3, $4)
+	`, agentID, clientCert.SerialNumber.String(), pki.Fingerprint(clientCert), clientCert.NotAfter)
+	if err != nil {
+		response.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "erreur lors de l'enregistrement du certificat agent")
+		return
+	}
+
 	response.JSON(w, http.StatusCreated, map[string]any{
-		"agent_id":    agentID,
-		"tenant_id":   tok.TenantID,
-		"ws_endpoint": "wss://rmm.example.com/ws/agent",
+		"agent_id":                agentID,
+		"tenant_id":               tok.TenantID,
+		"ws_endpoint":             h.wsEndpoint,
+		"client_cert_pem":         string(clientCertPEM),
+		"client_key_pem":          string(clientKeyPEM),
+		"server_cert_fingerprint": h.serverFingerprint,
 	})
 }
 

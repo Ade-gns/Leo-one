@@ -4,6 +4,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"strconv"
 	"time"
@@ -21,9 +22,9 @@ type Config struct {
 	WSAgentAddr string
 
 	// Base de données
-	DatabaseURL     string
-	DBMaxOpenConns  int
-	DBMaxIdleConns  int
+	DatabaseURL       string
+	DBMaxOpenConns    int
+	DBMaxIdleConns    int
 	DBConnMaxLifetime time.Duration
 
 	// JWT (RS256 — clés en PEM)
@@ -32,12 +33,28 @@ type Config struct {
 	JWTAccessTTL      time.Duration
 	JWTRefreshTTL     time.Duration
 
-	// CA interne (signe les certificats agents)
-	CACertPath string
-	CAKeyPath  string
+	// CA interne (signe les certificats agents et le certificat du listener WSS)
+	CACertPath     string
+	CAKeyPath      string
+	ServerCertPath string
+	ServerKeyPath  string
+
+	// Nom d'hôte ou IP publique du serveur — utilisé comme SAN du certificat
+	// WSS et pour construire le ws_endpoint renvoyé aux agents à l'enrollment.
+	PublicHost string
 
 	// Logging
 	LogLevel string // "debug" | "info" | "warn" | "error"
+}
+
+// PublicWSEndpoint construit l'URL wss:// que les agents utilisent pour se
+// connecter, à partir de PublicHost et du port de WSAgentAddr.
+func (c *Config) PublicWSEndpoint() string {
+	_, port, err := net.SplitHostPort(c.WSAgentAddr)
+	if err != nil {
+		port = "8081"
+	}
+	return fmt.Sprintf("wss://%s:%s/ws/agent", c.PublicHost, port)
 }
 
 // Load lit les variables d'environnement et retourne une Config.
@@ -59,8 +76,16 @@ func Load() (*Config, error) {
 		JWTAccessTTL:      getEnvDuration("JWT_ACCESS_TTL", 15*time.Minute),
 		JWTRefreshTTL:     getEnvDuration("JWT_REFRESH_TTL", 7*24*time.Hour),
 
-		CACertPath: getEnv("CA_CERT_PATH", ""),
-		CAKeyPath:  getEnv("CA_KEY_PATH", ""),
+		// Défauts relatifs (./data/pki/...) : fonctionnent aussi bien en dev
+		// local (go run) qu'en conteneur — le Dockerfile/docker-compose fixe
+		// ces variables sur un chemin absolu monté en volume (/data/pki) pour
+		// que la CA survive aux redéploiements.
+		CACertPath:     getEnv("CA_CERT_PATH", "./data/pki/ca-cert.pem"),
+		CAKeyPath:      getEnv("CA_KEY_PATH", "./data/pki/ca-key.pem"),
+		ServerCertPath: getEnv("SERVER_CERT_PATH", "./data/pki/server-cert.pem"),
+		ServerKeyPath:  getEnv("SERVER_KEY_PATH", "./data/pki/server-key.pem"),
+
+		PublicHost: getEnv("PUBLIC_HOST", "localhost"),
 
 		LogLevel: getEnv("LOG_LEVEL", "info"),
 	}

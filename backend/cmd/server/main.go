@@ -11,6 +11,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -29,6 +30,7 @@ import (
 	pkgauth "github.com/yourorg/leo-one/internal/pkg/auth"
 	"github.com/yourorg/leo-one/pkg/config"
 	"github.com/yourorg/leo-one/pkg/logger"
+	"github.com/yourorg/leo-one/pkg/pki"
 )
 
 func main() {
@@ -87,36 +89,58 @@ func main() {
 		log.Info("PostgreSQL connecté", "url_host", poolCfg.ConnConfig.Host)
 	}
 
+	// ── PKI interne (CA + certificat du listener WSS agents) ───────────────
+	//
+	// L'agent C exige toujours un certificat client mTLS et épingle
+	// l'empreinte SHA-256 du certificat serveur (pas de chaîne de confiance
+	// classique — voir agent/src/connection.c). La CA signe à la fois le
+	// certificat serveur ci-dessous et, à l'enrollment, le certificat de
+	// chaque agent (voir AgentHandler.Enroll).
+	ca, err := pki.EnsureCA(cfg.CACertPath, cfg.CAKeyPath)
+	if err != nil {
+		log.Error("Impossible d'initialiser la CA interne", "error", err)
+		os.Exit(1)
+	}
+
+	serverTLSCert, err := pki.EnsureServerCert(ca, cfg.ServerCertPath, cfg.ServerKeyPath, []string{cfg.PublicHost})
+	if err != nil {
+		log.Error("Impossible d'initialiser le certificat du listener WSS", "error", err)
+		os.Exit(1)
+	}
+	serverFingerprint := pki.Fingerprint(serverTLSCert.Leaf)
+	log.Info("PKI interne prête", "server_cert_fingerprint", serverFingerprint, "public_host", cfg.PublicHost)
+
 	// ── Injection de dépendances ────────────────────────────────────────────
 	//
 	// Ordre d'initialisation :
 	//   repos (persistence) → dispatcher → hub → handlers → routers
 
 	// Repos
-	agentRepo     := postgres.NewAgentRepo(pool)
-	metricRepo    := postgres.NewMetricRepo(pool)
-	tenantRepo    := postgres.NewTenantRepo(pool)
-	alertRepo     := postgres.NewAlertRepo(pool)
+	agentRepo := postgres.NewAgentRepo(pool)
+	metricRepo := postgres.NewMetricRepo(pool)
+	tenantRepo := postgres.NewTenantRepo(pool)
+	alertRepo := postgres.NewAlertRepo(pool)
 	inventoryRepo := postgres.NewInventoryRepo(pool)
 
 	// WebSocket
 	dispatcher := websocket.NewDispatcher(agentRepo, metricRepo, inventoryRepo, pool, log)
-	hub         := websocket.NewHub(dispatcher, log)
+	hub := websocket.NewHub(dispatcher, log)
 	dispatcher.SetHub(hub)
 
-	agentWSH := wsHandler.NewAgentWSHandler(hub, log)
+	agentWSH := wsHandler.NewAgentWSHandler(hub, pool, log)
 
 	// Auth
 	jwtVerifier := pkgauth.NewJWTVerifier(jwtSecret)
 
 	// Handlers
-	authHandler      := handlers.NewAuthHandler(pool, jwtVerifier, cfg.JWTAccessTTL, cfg.JWTRefreshTTL)
-	agentHandler     := handlers.NewAgentHandler(agentRepo, pool, hub)
-	metricHandler    := handlers.NewMetricHandler(metricRepo)
+	authHandler := handlers.NewAuthHandler(pool, jwtVerifier, cfg.JWTAccessTTL, cfg.JWTRefreshTTL)
+	agentHandler := handlers.NewAgentHandler(agentRepo, pool, hub, ca, serverFingerprint, cfg.PublicWSEndpoint())
+	metricHandler := handlers.NewMetricHandler(metricRepo)
 	dashboardHandler := handlers.NewDashboardHandler(pool)
-	alertHandler     := handlers.NewAlertHandler(alertRepo)
+	alertHandler := handlers.NewAlertHandler(alertRepo)
 	inventoryHandler := handlers.NewInventoryHandler(inventoryRepo)
-	stubHandler      := &handlers.StubHandler{}
+	enrollmentHandler := handlers.NewEnrollmentHandler(pool)
+	stubHandler := &handlers.StubHandler{}
 
 	// Routeur API REST (Chi)
 	deps := &chiRouter.Dependencies{
@@ -131,7 +155,7 @@ func main() {
 		UserHandler:       stubHandler,
 		RoleHandler:       stubHandler,
 		TenantHandler:     stubHandler,
-		EnrollmentHandler: stubHandler,
+		EnrollmentHandler: enrollmentHandler,
 		JWTVerifier:       jwtVerifier,
 		TenantRepo:        tenantRepo,
 		Logger:            log,
@@ -155,10 +179,18 @@ func main() {
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
 
+	wsTLSConfig, err := wsHandler.ConfigureMTLS(ca.CertPEM())
+	if err != nil {
+		log.Error("Impossible de configurer le mTLS du listener WSS", "error", err)
+		os.Exit(1)
+	}
+	wsTLSConfig.Certificates = []tls.Certificate{serverTLSCert}
+
 	wsServer := &http.Server{
 		Addr:        cfg.WSAgentAddr,
 		Handler:     wsMux,
-		ReadTimeout: 0,  // pas de timeout de lecture pour les connexions WS longues
+		TLSConfig:   wsTLSConfig,
+		ReadTimeout: 0, // pas de timeout de lecture pour les connexions WS longues
 		IdleTimeout: 0,
 	}
 
@@ -172,8 +204,9 @@ func main() {
 	}()
 
 	go func() {
-		log.Info("Serveur WebSocket agents démarré", "addr", cfg.WSAgentAddr)
-		if err := wsServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.Info("Serveur WebSocket agents démarré (mTLS)", "addr", cfg.WSAgentAddr)
+		// Certificats déjà chargés dans wsTLSConfig : pas de chemins de fichiers ici.
+		if err := wsServer.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Error("Erreur serveur WebSocket", "error", err)
 			os.Exit(1)
 		}

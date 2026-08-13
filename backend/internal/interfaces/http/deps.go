@@ -24,7 +24,7 @@ type Dependencies struct {
 	UserHandler       *handlers.StubHandler
 	RoleHandler       *handlers.StubHandler
 	TenantHandler     *handlers.StubHandler
-	EnrollmentHandler *handlers.StubHandler
+	EnrollmentHandler *handlers.EnrollmentHandler
 
 	// Infrastructure
 	JWTVerifier *pkgauth.JWTVerifier

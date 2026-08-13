@@ -8,9 +8,9 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	agentDomain     "github.com/yourorg/leo-one/internal/domain/agent"
+	agentDomain "github.com/yourorg/leo-one/internal/domain/agent"
 	inventoryDomain "github.com/yourorg/leo-one/internal/domain/inventory"
-	metricDomain    "github.com/yourorg/leo-one/internal/domain/metric"
+	metricDomain "github.com/yourorg/leo-one/internal/domain/metric"
 )
 
 // Enveloppe du protocole WSS (doit correspondre au format de l'agent C).
@@ -24,12 +24,12 @@ type envelope struct {
 
 // Types de messages entrants (doivent correspondre aux constantes de leo_agent.h).
 const (
-	msgTypeHello      = 1
-	msgTypeHeartbeat  = 2
-	msgTypeMetrics    = 3
-	msgTypeInventory  = 4
-	msgTypeCmdResult  = 5
-	msgTypePong       = 7
+	msgTypeHello     = 1
+	msgTypeHeartbeat = 2
+	msgTypeMetrics   = 3
+	msgTypeInventory = 4
+	msgTypeCmdResult = 5
+	msgTypePong      = 7
 )
 
 // Intervalles envoyés dans HELLO_ACK (doivent correspondre aux défauts de
