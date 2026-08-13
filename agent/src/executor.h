@@ -36,4 +36,27 @@ leo_error_t leo_exec_script(const char *interpreter,
                              int         timeout_secs,
                              leo_exec_result_t *result);
 
+/**
+ * Exécute directement argv[0] avec les arguments argv[1..] via fork()+execvp(),
+ * sans passer par un shell ni un fichier temporaire. À utiliser pour toute
+ * commande STRUCTURÉE construite par l'agent lui-même à partir de paramètres
+ * déjà validés (ex: INSTALL_PKG, REBOOT) — contrairement à leo_exec_script(),
+ * il n'y a ici aucune surface d'injection shell à défendre : argv est passé
+ * tel quel à execvp(), jamais interprété par /bin/sh.
+ * @param argv        Tableau terminé par NULL ; argv[0] est le binaire
+ *                     (résolu via $PATH, comme execvp).
+ * @param extra_env   Tableau de chaînes "CLE=valeur" terminé par NULL, à
+ *                     ajouter à l'environnement du processus enfant
+ *                     uniquement (peut être NULL).
+ * @param timeout_secs Timeout en secondes (0 = pas de timeout)
+ * @param result       Résultat à remplir (alloué par l'appelant)
+ * @return LEO_OK, LEO_ERR_SYSTEM, ou LEO_ERR_TIMEOUT. Jamais LEO_ERR_PROTOCOL :
+ *         il n'y a pas de whitelist ici, argv[0] est exécuté tel quel — c'est
+ *         à l'appelant de ne construire argv qu'à partir de données validées.
+ */
+leo_error_t leo_exec_argv(char *const argv[],
+                           const char *const extra_env[],
+                           int timeout_secs,
+                           leo_exec_result_t *result);
+
 #endif /* LEO_EXECUTOR_H */

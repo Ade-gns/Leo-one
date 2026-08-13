@@ -104,39 +104,32 @@ static void _drain_fd(int fd, char *buf, size_t buf_max, size_t *offset) {
         *offset += (size_t)n;
 }
 
-/* ─── API publique ───────────────────────────────────────────────────────── */
+/* ─── Cœur partagé : fork + pipes + boucle de lecture/timeout ───────────── */
 
-leo_error_t leo_exec_script(const char *interpreter,
-                             const char *script,
-                             int         timeout_secs,
-                             leo_exec_result_t *result)
+/**
+ * Exécute argv[0] (résolu via $PATH) avec les arguments argv[1..], dans un
+ * processus fils dont stdout/stderr sont capturés via pipes. Partagé par
+ * leo_exec_script() (argv = {interpreter, tmppath, NULL}) et leo_exec_argv()
+ * (argv fourni tel quel par l'appelant, ex: {"apt-get","update","-qq",NULL})
+ * — toute la mécanique fork/pipe/select/timeout/waitpid est commune, seule
+ * la construction d'argv (et donc la présence ou non d'un fichier temporaire
+ * et d'une whitelist d'interpréteur) diffère entre les deux appelants.
+ * @param extra_env  "CLE=valeur" à ajouter à l'environnement de l'enfant
+ *                   uniquement (peut être NULL) — n'affecte jamais le
+ *                   processus agent lui-même, l'enfant a son propre espace
+ *                   d'adressage depuis fork().
+ */
+static leo_error_t _run_child(char *const argv[], const char *const extra_env[],
+                               int timeout_secs, leo_exec_result_t *result)
 {
-    if (!interpreter || !script || !result)
-        return LEO_ERR_SYSTEM;
-
-    /* Validation de l'interpréteur */
-    if (!_interpreter_allowed(interpreter)) {
-        LOG_ERROR("Interpréteur non autorisé : '%s'", interpreter);
-        return LEO_ERR_PROTOCOL;
-    }
-
-    /* Initialiser le résultat */
     memset(result, 0, sizeof(*result));
     result->exit_code = -1;
-
-    /* Écrire le script dans un fichier temporaire */
-    char tmppath[64];
-    int  script_fd = _write_script_tmp(script, tmppath);
-    if (script_fd < 0)
-        return LEO_ERR_SYSTEM;
-    close(script_fd);  /* L'enfant ouvrira le fichier via son chemin */
 
     /* Créer les deux pipes : [0]=lecture parent, [1]=écriture enfant */
     int stdout_pipe[2] = { -1, -1 };
     int stderr_pipe[2] = { -1, -1 };
     if (pipe(stdout_pipe) != 0 || pipe(stderr_pipe) != 0) {
         LOG_ERROR("pipe() échoué : %s", strerror(errno));
-        unlink(tmppath);
         if (stdout_pipe[0] >= 0) { close(stdout_pipe[0]); close(stdout_pipe[1]); }
         return LEO_ERR_SYSTEM;
     }
@@ -150,7 +143,6 @@ leo_error_t leo_exec_script(const char *interpreter,
         LOG_ERROR("fork() échoué : %s", strerror(errno));
         close(stdout_pipe[0]); close(stdout_pipe[1]);
         close(stderr_pipe[0]); close(stderr_pipe[1]);
-        unlink(tmppath);
         return LEO_ERR_SYSTEM;
     }
 
@@ -174,9 +166,13 @@ leo_error_t leo_exec_script(const char *interpreter,
             close(devnull);
         }
 
-        /* Exécuter : {interpreter} {tmppath} */
-        char *argv[] = { (char *)interpreter, tmppath, NULL };
-        execvp(interpreter, argv);
+        /* Variables d'environnement additionnelles — sans effet sur le
+         * process agent (adressage séparé depuis fork()), on exec juste après. */
+        if (extra_env) {
+            for (int i = 0; extra_env[i]; i++) putenv((char *)extra_env[i]);
+        }
+
+        execvp(argv[0], argv);
 
         /* Si execvp retourne, c'est une erreur */
         _exit(127);
@@ -288,13 +284,57 @@ leo_error_t leo_exec_script(const char *interpreter,
     result->stdout_buf[stdout_off < LEO_EXEC_STDOUT_MAX ? stdout_off : LEO_EXEC_STDOUT_MAX - 1] = '\0';
     result->stderr_buf[stderr_off < LEO_EXEC_STDERR_MAX ? stderr_off : LEO_EXEC_STDERR_MAX - 1] = '\0';
 
-    /* Nettoyage */
+    /* Nettoyage (pas de fichier temporaire ici — propre à leo_exec_script()) */
     close(stdout_pipe[0]);
     close(stderr_pipe[0]);
-    unlink(tmppath);
 
-    LOG_DEBUG("Script exécuté via '%s' : exit_code=%d stdout=%zu stderr=%zu octets",
-              interpreter, result->exit_code, stdout_off, stderr_off);
+    LOG_DEBUG("Commande '%s' exécutée : exit_code=%d stdout=%zu stderr=%zu octets",
+              argv[0] ? argv[0] : "?", result->exit_code, stdout_off, stderr_off);
 
     return ret;
+}
+
+/* ─── API publique ───────────────────────────────────────────────────────── */
+
+leo_error_t leo_exec_script(const char *interpreter,
+                             const char *script,
+                             int         timeout_secs,
+                             leo_exec_result_t *result)
+{
+    if (!interpreter || !script || !result)
+        return LEO_ERR_SYSTEM;
+
+    /* Validation de l'interpréteur */
+    if (!_interpreter_allowed(interpreter)) {
+        LOG_ERROR("Interpréteur non autorisé : '%s'", interpreter);
+        return LEO_ERR_PROTOCOL;
+    }
+
+    /* Écrire le script dans un fichier temporaire */
+    char tmppath[64];
+    int  script_fd = _write_script_tmp(script, tmppath);
+    if (script_fd < 0)
+        return LEO_ERR_SYSTEM;
+    close(script_fd);  /* L'enfant ouvrira le fichier via son chemin */
+
+    char *argv[] = { (char *)interpreter, tmppath, NULL };
+    leo_error_t ret = _run_child(argv, NULL, timeout_secs, result);
+
+    /* Le fichier temporaire est à nous quel que soit le chemin de sortie de
+     * _run_child() (pipe/fork échoué, timeout, ou succès) : un seul unlink
+     * ici plutôt que dupliqué sur chaque branche d'erreur interne. */
+    unlink(tmppath);
+
+    return ret;
+}
+
+leo_error_t leo_exec_argv(char *const argv[],
+                           const char *const extra_env[],
+                           int timeout_secs,
+                           leo_exec_result_t *result)
+{
+    if (!argv || !argv[0] || !result)
+        return LEO_ERR_SYSTEM;
+
+    return _run_child(argv, extra_env, timeout_secs, result);
 }
