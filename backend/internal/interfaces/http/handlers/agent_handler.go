@@ -195,6 +195,51 @@ func (h *AgentHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// RevokeCertificate révoque le(s) certificat(s) mTLS actif(s) d'un agent
+// sans supprimer l'agent — contrairement à Delete (qui révoque via cascade
+// FK en supprimant la ligne agent_certificates), ceci garde l'agent et son
+// historique intacts. Utile pour une rotation de certificat ou après
+// compromission : l'agent devra être ré-enrôlé (nouveau token) pour obtenir
+// un nouveau certificat et se reconnecter.
+//
+// Coupe aussi immédiatement toute connexion WSS en cours (h.hub.Disconnect) :
+// AgentWSHandler.checkNotRevoked ne s'exécute qu'au handshake, donc sans ça
+// un agent déjà connecté resterait actif jusqu'à sa prochaine reconnexion.
+//
+//	DELETE /api/v1/agents/:agentID/certificate
+func (h *AgentHandler) RevokeCertificate(w http.ResponseWriter, r *http.Request) {
+	tenantID := httpctx.TenantIDFromContext(r.Context())
+	agentID := chi.URLParam(r, "agentID")
+
+	// Vérifie que l'agent appartient au tenant courant avant de toucher à ses
+	// certificats — agent_certificates n'a pas de colonne tenant_id, la
+	// requête de révocation ci-dessous est donc indexée sur agent_id seul.
+	agent, err := h.agentRepo.FindByID(r.Context(), tenantID, agentID)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		response.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "erreur de base de données")
+		return
+	}
+	if agent == nil {
+		response.Error(w, http.StatusNotFound, "NOT_FOUND", "agent introuvable")
+		return
+	}
+
+	tag, err := h.pool.Exec(r.Context(), `
+		UPDATE agent_certificates SET revoked_at = NOW(), revoke_reason = $1
+		WHERE agent_id = $2 AND revoked_at IS NULL
+	`, "révoqué manuellement via l'API", agentID)
+	if err != nil {
+		response.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "erreur lors de la révocation")
+		return
+	}
+
+	h.hub.Disconnect(agentID)
+
+	response.JSON(w, http.StatusOK, map[string]any{
+		"revoked_count": tag.RowsAffected(),
+	})
+}
+
 // Enroll inscrit un nouvel agent via un token d'enrollment.
 //
 //	POST /api/v1/enroll

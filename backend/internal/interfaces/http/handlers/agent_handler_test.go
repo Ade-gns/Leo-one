@@ -308,6 +308,50 @@ func TestAgentHandler_Delete(t *testing.T) {
 	})
 }
 
+// RevokeCertificate : seule la branche "agent introuvable"/"erreur FindByID"
+// est testable sans base de données réelle — dès l'agent trouvé, le handler
+// exécute une requête SQL directe via *pgxpool.Pool (révocation) puis
+// h.hub.Disconnect, non mockables ici (mêmes limites que CreateCommand
+// ci-dessous). Voir le test live manuel du 2026-08-13 pour la couverture du
+// chemin succès (révocation + coupure de la connexion WSS en cours).
+func TestAgentHandler_RevokeCertificate(t *testing.T) {
+	t.Run("agent introuvable retourne 404", func(t *testing.T) {
+		repo := &mockAgentRepo{
+			findByIDFunc: func(ctx context.Context, tenantID, agentID string) (*agentDomain.Agent, error) {
+				return nil, nil
+			},
+		}
+		h := NewAgentHandler(repo, nil, nil, nil, "", "")
+		req := httptest.NewRequest(http.MethodDelete, "/api/v1/agents/a1/certificate", nil)
+		req = withURLParam(req, "agentID", "a1")
+		rec := httptest.NewRecorder()
+
+		h.RevokeCertificate(rec, req)
+
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("code = %d, attendu %d", rec.Code, http.StatusNotFound)
+		}
+	})
+
+	t.Run("erreur repo sur FindByID retourne 500", func(t *testing.T) {
+		repo := &mockAgentRepo{
+			findByIDFunc: func(ctx context.Context, tenantID, agentID string) (*agentDomain.Agent, error) {
+				return nil, errors.New("db down")
+			},
+		}
+		h := NewAgentHandler(repo, nil, nil, nil, "", "")
+		req := httptest.NewRequest(http.MethodDelete, "/api/v1/agents/a1/certificate", nil)
+		req = withURLParam(req, "agentID", "a1")
+		rec := httptest.NewRecorder()
+
+		h.RevokeCertificate(rec, req)
+
+		if rec.Code != http.StatusInternalServerError {
+			t.Fatalf("code = %d, attendu %d", rec.Code, http.StatusInternalServerError)
+		}
+	})
+}
+
 // CreateCommand : seules les branches ne touchant pas la BDD sont testables
 // sans base de données réelle (le handler exécute une requête SQL directe
 // via *pgxpool.Pool dès que l'agent est trouvé et le corps décodé).

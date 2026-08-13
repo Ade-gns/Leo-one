@@ -91,6 +91,13 @@ package http
 //         Auth    : agents:delete
 //         Resp 204: agent supprimé, certificat révoqué
 //
+//  DELETE /api/v1/agents/:agent_id/certificate
+//         Auth    : agents:delete
+//         Révoque le(s) certificat(s) mTLS actif(s) sans supprimer l'agent
+//         (rotation de certificat, agent compromis) — coupe aussi toute
+//         connexion WSS en cours. Un nouvel enrollment est requis ensuite.
+//         Resp 200: {"data":{"revoked_count":1}}
+//
 //  POST   /api/v1/agents/:agent_id/commands
 //         Auth    : agents:execute
 //         Body    : {
@@ -427,6 +434,7 @@ func NewRouter(deps *Dependencies) http.Handler {
 				r.Get("/{agentID}", RequirePermission("agents", "read")(deps.AgentHandler.Get))
 				r.Patch("/{agentID}", RequirePermission("agents", "write")(deps.AgentHandler.Update))
 				r.Delete("/{agentID}", RequirePermission("agents", "delete")(deps.AgentHandler.Delete))
+				r.Delete("/{agentID}/certificate", RequirePermission("agents", "delete")(deps.AgentHandler.RevokeCertificate))
 
 				r.Post("/{agentID}/commands", RequirePermission("agents", "execute")(deps.AgentHandler.CreateCommand))
 				r.Get("/{agentID}/commands", RequirePermission("agents", "read")(deps.AgentHandler.ListCommands))

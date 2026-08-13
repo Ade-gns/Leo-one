@@ -92,6 +92,31 @@ func (h *Hub) HandleIncoming(client *Client, message []byte) {
 	h.dispatcher.Dispatch(client, message)
 }
 
+// Disconnect ferme de force la connexion WSS d'un agent, s'il est
+// actuellement connecté. Utilisé après révocation de son certificat (voir
+// AgentHandler.RevokeCertificate) : AgentWSHandler.checkNotRevoked ne
+// s'exécute qu'au handshake, donc sans cet appel un agent déjà connecté au
+// moment de la révocation resterait actif jusqu'à sa prochaine
+// (re)connexion au lieu d'être coupé immédiatement.
+// Retourne false si l'agent n'était pas connecté.
+func (h *Hub) Disconnect(agentID string) bool {
+	h.mu.Lock()
+	client, ok := h.clients[agentID]
+	if ok {
+		close(client.send)
+		delete(h.clients, agentID)
+	}
+	h.mu.Unlock()
+
+	if !ok {
+		return false
+	}
+
+	h.logger.Info("Agent déconnecté de force (certificat révoqué)", "agent_id", agentID)
+	h.dispatcher.MarkOffline(agentID)
+	return true
+}
+
 // SendToAgent envoie un message JSON à un agent spécifique.
 // Retourne false si l'agent n'est pas connecté ou si le canal est saturé.
 func (h *Hub) SendToAgent(agentID string, msg any) bool {
