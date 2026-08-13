@@ -38,6 +38,9 @@ export const agentsApi = {
   getCommand: (agentID: string, commandID: string) =>
     get<ApiResponse<Command>>(`${BASE}/${agentID}/commands/${commandID}`),
 
+  wakeUp: (agentID: string) =>
+    post<ApiResponse<{ status: string; message: string; online: boolean }>>(`${BASE}/${agentID}/wake-up`, {}),
+
   getHardwareInventory: (agentID: string) =>
     get<ApiResponse<HardwareInventory>>(`${BASE}/${agentID}/inventory/hardware`),
 

@@ -61,6 +61,17 @@ export function useInstallPkg(agentID: string) {
   })
 }
 
+/** Mutation : réveil manuel d'un agent */
+export function useWakeAgent(agentID: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: () => agentsApi.wakeUp(agentID),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: agentKeys.detail(agentID) })
+    },
+  })
+}
+
 /** Historique des commandes d'un agent */
 export function useAgentCommands(agentID: string) {
   return useQuery({

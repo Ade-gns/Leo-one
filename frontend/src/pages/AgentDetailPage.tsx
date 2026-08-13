@@ -3,8 +3,8 @@
  */
 import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { ChevronLeft, Terminal, Package, RefreshCw, AlertCircle } from 'lucide-react'
-import { useAgent } from '@/hooks/useAgents'
+import { ChevronLeft, Terminal, Package, RefreshCw, AlertCircle, Zap } from 'lucide-react'
+import { useAgent, useWakeAgent } from '@/hooks/useAgents'
 import { AgentStatusBadge }    from '@/components/agents/AgentStatusBadge'
 import { AgentDetailPanel }    from '@/components/agents/AgentDetailPanel'
 import { AgentCommandModal }   from '@/components/agents/AgentCommandModal'
@@ -18,6 +18,7 @@ export default function AgentDetailPage() {
   const [showInstallModal, setShowInstallModal] = useState(false)
 
   const { data, isLoading, isError, refetch } = useAgent(agentId!)
+  const wakeMutation = useWakeAgent(agentId || '')
 
   if (isLoading) {
     return (
@@ -71,6 +72,14 @@ export default function AgentDetailPage() {
             className="flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-600 hover:bg-gray-50"
           >
             <RefreshCw className="h-4 w-4" />
+          </button>
+          <button
+            onClick={() => wakeMutation.mutate()}
+            disabled={wakeMutation.isPending || agent.status !== 'online'}
+            className="flex items-center gap-2 rounded-lg border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Zap className="h-4 w-4" />
+            {wakeMutation.isPending ? 'Rêve ...' : 'Relancer'}
           </button>
           <button
             onClick={() => setShowInstallModal(true)}

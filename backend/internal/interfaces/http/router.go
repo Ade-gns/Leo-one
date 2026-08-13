@@ -431,6 +431,7 @@ func NewRouter(deps *Dependencies) http.Handler {
 				r.Post("/{agentID}/commands", RequirePermission("agents", "execute")(deps.AgentHandler.CreateCommand))
 				r.Get("/{agentID}/commands", RequirePermission("agents", "read")(deps.AgentHandler.ListCommands))
 				r.Get("/{agentID}/commands/{commandID}", RequirePermission("agents", "read")(deps.AgentHandler.GetCommand))
+				r.Post("/{agentID}/wake-up", RequirePermission("agents", "execute")(deps.AgentHandler.WakeUp))
 
 				r.Get("/{agentID}/metrics", RequirePermission("metrics", "read")(deps.MetricHandler.Query))
 				r.Get("/{agentID}/metrics/latest", RequirePermission("metrics", "read")(deps.MetricHandler.Latest))
