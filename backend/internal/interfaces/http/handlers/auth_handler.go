@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
@@ -258,6 +259,38 @@ func (h *AuthHandler) Health(w http.ResponseWriter, r *http.Request) {
 }
 
 // ─── Argon2id ─────────────────────────────────────────────────────────────────
+
+// argon2idMemory/Time/Threads/KeyLen : mêmes paramètres que ceux acceptés en
+// lecture par parseArgon2idHash — gardés identiques à ce qui a servi à créer
+// les hashs existants (voir dev_environment) pour ne pas introduire un
+// second jeu de coûts à maintenir.
+const (
+	argon2idMemory  = 65536
+	argon2idTime    = 3
+	argon2idThreads = 2
+	argon2idKeyLen  = 32
+	argon2idSaltLen = 16
+)
+
+// hashArgon2id hache un mot de passe en clair et retourne l'encodage PHC
+// standard ($argon2id$v=19$m=...,t=...,p=...$<salt_b64>$<hash_b64>),
+// vérifiable ensuite par verifyArgon2id. Utilisé à la création d'un
+// utilisateur (voir UserHandler.Create) — jamais pour l'authentification
+// elle-même, qui compare toujours contre un hash déjà stocké.
+func hashArgon2id(password string) (string, error) {
+	salt := make([]byte, argon2idSaltLen)
+	if _, err := rand.Read(salt); err != nil {
+		return "", fmt.Errorf("génération du sel : %w", err)
+	}
+
+	hash := argon2.IDKey([]byte(password), salt, argon2idTime, argon2idMemory, argon2idThreads, argon2idKeyLen)
+
+	return fmt.Sprintf("$argon2id$v=19$m=%d,t=%d,p=%d$%s$%s",
+		argon2idMemory, argon2idTime, argon2idThreads,
+		base64.RawStdEncoding.EncodeToString(salt),
+		base64.RawStdEncoding.EncodeToString(hash),
+	), nil
+}
 
 // verifyArgon2id vérifie un mot de passe contre un hash au format PHC standard :
 // $argon2id$v=19$m=65536,t=3,p=2$<salt_b64>$<hash_b64>

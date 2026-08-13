@@ -21,8 +21,8 @@ type Dependencies struct {
 	AlertHandler      *handlers.AlertHandler
 	TicketHandler     *handlers.StubHandler
 	WorkspaceHandler  *handlers.StubHandler
-	UserHandler       *handlers.StubHandler
-	RoleHandler       *handlers.StubHandler
+	UserHandler       *handlers.UserHandler
+	RoleHandler       *handlers.RoleHandler
 	TenantHandler     *handlers.StubHandler
 	EnrollmentHandler *handlers.EnrollmentHandler
 
