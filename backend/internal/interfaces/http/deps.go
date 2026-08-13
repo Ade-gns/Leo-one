@@ -19,11 +19,10 @@ type Dependencies struct {
 	MetricHandler     *handlers.MetricHandler
 	InventoryHandler  *handlers.InventoryHandler
 	AlertHandler      *handlers.AlertHandler
-	TicketHandler     *handlers.StubHandler
 	WorkspaceHandler  *handlers.WorkspaceHandler
 	UserHandler       *handlers.UserHandler
 	RoleHandler       *handlers.RoleHandler
-	TenantHandler     *handlers.StubHandler
+	TenantHandler     *handlers.TenantHandler
 	EnrollmentHandler *handlers.EnrollmentHandler
 
 	// Infrastructure

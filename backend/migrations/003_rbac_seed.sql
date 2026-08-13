@@ -19,10 +19,6 @@ INSERT INTO permissions (resource, action, description) VALUES
     ('alerts',  'acknowledge',   'Acquitter une alerte'),
     ('alerts',  'write',         'Créer/modifier des règles d''alerte'),
     ('alerts',  'delete',        'Supprimer des règles d''alerte'),
-    -- Tickets
-    ('tickets', 'read',   'Voir les tickets'),
-    ('tickets', 'write',  'Créer et modifier des tickets'),
-    ('tickets', 'delete', 'Supprimer des tickets'),
     -- Utilisateurs
     ('users',   'read',   'Voir la liste des utilisateurs'),
     ('users',   'write',  'Créer et modifier des utilisateurs'),
@@ -60,7 +56,7 @@ BEGIN
 
     -- Rôle : Technicien (tout sauf gestion utilisateurs/tenant)
     INSERT INTO roles (tenant_id, name, description, is_system)
-    VALUES (p_tenant_id, 'Technicien', 'Gestion des agents, alertes et tickets', TRUE)
+    VALUES (p_tenant_id, 'Technicien', 'Gestion des agents et des alertes', TRUE)
     RETURNING id INTO role_tech_id;
 
     INSERT INTO role_permissions (role_id, permission_id)
@@ -73,8 +69,6 @@ BEGIN
         ('alerts',     'read'),
         ('alerts',     'acknowledge'),
         ('alerts',     'write'),
-        ('tickets',    'read'),
-        ('tickets',    'write'),
         ('inventory',  'read'),
         ('workspaces', 'read')
     );

@@ -29,10 +29,10 @@ func (r *TenantRepo) FindByID(ctx context.Context, id string) (*tenantDomain.Ten
 
 	var t tenantDomain.Tenant
 	err := r.pool.QueryRow(ctx, `
-		SELECT id, name, is_active
+		SELECT id, name, slug, plan, max_agents, is_active, created_at, updated_at
 		FROM tenants
 		WHERE id = $1
-	`, id).Scan(&t.ID, &t.Name, &t.IsActive)
+	`, id).Scan(&t.ID, &t.Name, &t.Slug, &t.Plan, &t.MaxAgents, &t.IsActive, &t.CreatedAt, &t.UpdatedAt)
 
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
@@ -43,3 +43,23 @@ func (r *TenantRepo) FindByID(ctx context.Context, id string) (*tenantDomain.Ten
 
 	return &t, nil
 }
+
+// Update met à jour le nom d'un tenant existant.
+func (r *TenantRepo) Update(ctx context.Context, t *tenantDomain.Tenant) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE tenants SET name = $1, updated_at = NOW() WHERE id = $2
+	`, t.Name, t.ID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
+}
+
+var _ tenantDomain.Repository = (*TenantRepo)(nil)

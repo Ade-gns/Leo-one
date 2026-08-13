@@ -145,7 +145,7 @@ func main() {
 	userHandler := handlers.NewUserHandler(userRepo)
 	roleHandler := handlers.NewRoleHandler(pool)
 	workspaceHandler := handlers.NewWorkspaceHandler(workspaceRepo)
-	stubHandler := &handlers.StubHandler{}
+	tenantHandler := handlers.NewTenantHandler(tenantRepo, agentRepo)
 
 	// Routeur API REST (Chi)
 	deps := &chiRouter.Dependencies{
@@ -155,11 +155,10 @@ func main() {
 		MetricHandler:     metricHandler,
 		InventoryHandler:  inventoryHandler,
 		AlertHandler:      alertHandler,
-		TicketHandler:     stubHandler,
 		WorkspaceHandler:  workspaceHandler,
 		UserHandler:       userHandler,
 		RoleHandler:       roleHandler,
-		TenantHandler:     stubHandler,
+		TenantHandler:     tenantHandler,
 		EnrollmentHandler: enrollmentHandler,
 		JWTVerifier:       jwtVerifier,
 		TenantRepo:        tenantRepo,

@@ -26,8 +26,6 @@ CREATE TYPE metric_type     AS ENUM (
 );
 CREATE TYPE alert_severity  AS ENUM ('info', 'warning', 'critical');
 CREATE TYPE alert_status    AS ENUM ('open', 'acknowledged', 'resolved');
-CREATE TYPE ticket_status   AS ENUM ('open', 'in_progress', 'resolved', 'closed');
-CREATE TYPE ticket_priority AS ENUM ('low', 'medium', 'high', 'critical');
 CREATE TYPE command_status  AS ENUM ('pending', 'running', 'success', 'failed', 'timeout');
 CREATE TYPE command_type    AS ENUM ('exec_script', 'install_pkg', 'reboot', 'collect_inventory', 'ping');
 
@@ -107,7 +105,7 @@ CREATE INDEX idx_roles_tenant_id ON roles(tenant_id);
 -- Permissions atomiques : ressource + action
 CREATE TABLE permissions (
     id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    resource    TEXT NOT NULL,  -- 'agents' | 'metrics' | 'alerts' | 'tickets' | 'users' | 'tenants' | 'scripts'
+    resource    TEXT NOT NULL,  -- 'agents' | 'metrics' | 'alerts' | 'users' | 'tenants' | 'scripts'
     action      TEXT NOT NULL,  -- 'read' | 'write' | 'delete' | 'execute'
     description TEXT,
     UNIQUE(resource, action)
@@ -351,51 +349,3 @@ CREATE TABLE software_inventory (
 
 CREATE INDEX idx_sw_inventory_agent ON software_inventory(agent_id, collected_at DESC);
 CREATE INDEX idx_sw_inventory_name  ON software_inventory(tenant_id, name);
-
--- =============================================================================
--- TABLE : tickets
--- Tickets de support intégrés, liés optionnellement à un agent ou une alerte.
--- =============================================================================
-CREATE TABLE tickets (
-    id           UUID            PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id    UUID            NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-    agent_id     UUID            REFERENCES agents(id) ON DELETE SET NULL,
-    alert_id     UUID            REFERENCES alerts(id) ON DELETE SET NULL,
-    title        TEXT            NOT NULL,
-    description  TEXT,
-    status       ticket_status   NOT NULL DEFAULT 'open',
-    priority     ticket_priority NOT NULL DEFAULT 'medium',
-    assigned_to  UUID            REFERENCES users(id) ON DELETE SET NULL,
-    created_by   UUID            REFERENCES users(id) ON DELETE SET NULL,
-    resolved_at  TIMESTAMPTZ,
-    created_at   TIMESTAMPTZ     NOT NULL DEFAULT NOW(),
-    updated_at   TIMESTAMPTZ     NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX idx_tickets_tenant_status ON tickets(tenant_id, status);
-CREATE INDEX idx_tickets_assigned      ON tickets(assigned_to);
-CREATE INDEX idx_tickets_agent         ON tickets(agent_id);
-
-CREATE TRIGGER trg_tickets_updated_at
-    BEFORE UPDATE ON tickets
-    FOR EACH ROW EXECUTE FUNCTION set_updated_at();
-
--- =============================================================================
--- TABLE : ticket_comments
--- Commentaires et historique d'activité sur les tickets.
--- =============================================================================
-CREATE TABLE ticket_comments (
-    id         UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    ticket_id  UUID        NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
-    tenant_id  UUID        NOT NULL,
-    author_id  UUID        REFERENCES users(id) ON DELETE SET NULL,
-    body       TEXT        NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX idx_ticket_comments_ticket ON ticket_comments(ticket_id);
-
-CREATE TRIGGER trg_ticket_comments_updated_at
-    BEFORE UPDATE ON ticket_comments
-    FOR EACH ROW EXECUTE FUNCTION set_updated_at();

@@ -6,7 +6,6 @@ import {
   LayoutDashboard,
   Monitor,
   Bell,
-  Ticket,
   Settings,
   Users,
   Boxes,
@@ -29,7 +28,6 @@ const NAV_ITEMS: NavItem[] = [
   { label: 'Machines',        to: '/agents',  icon: Monitor         },
   { label: 'Workspaces',      to: '/workspaces', icon: Boxes        },
   { label: 'Alertes',         to: '/alerts',  icon: Bell            },
-  { label: 'Tickets',         to: '/tickets', icon: Ticket          },
   { label: 'Utilisateurs',    to: '/users',   icon: Users           },
   { label: 'Paramètres',      to: '/settings',icon: Settings        },
 ]

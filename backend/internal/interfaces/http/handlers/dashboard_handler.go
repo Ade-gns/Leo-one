@@ -51,12 +51,6 @@ func (h *DashboardHandler) Summary(w http.ResponseWriter, r *http.Request) {
 		FROM alerts WHERE tenant_id = $1
 	`, tenantID).Scan(&alertsOpen, &alertsCritical)
 
-	// Comptage des tickets ouverts
-	var ticketsOpen int
-	_ = h.pool.QueryRow(ctx, `
-		SELECT COUNT(*) FROM tickets WHERE tenant_id = $1 AND status = 'open'
-	`, tenantID).Scan(&ticketsOpen)
-
 	response.JSON(w, http.StatusOK, map[string]any{
 		"agents_total":        agentsTotal,
 		"agents_online":       agentsOnline,
@@ -64,6 +58,5 @@ func (h *DashboardHandler) Summary(w http.ResponseWriter, r *http.Request) {
 		"agents_unresponsive": agentsUnresponsive,
 		"alerts_open":         alertsOpen,
 		"alerts_critical":     alertsCritical,
-		"tickets_open":        ticketsOpen,
 	})
 }

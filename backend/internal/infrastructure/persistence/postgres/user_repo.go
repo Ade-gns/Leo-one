@@ -186,7 +186,7 @@ func (r *UserRepo) Update(ctx context.Context, u *userDomain.User) error {
 }
 
 // Delete supprime définitivement un utilisateur du tenant donné. Les tables
-// qui référencent users(id) (tickets, alertes, tokens d'enrollment, ...)
+// qui référencent users(id) (alertes, tokens d'enrollment, ...)
 // utilisent ON DELETE SET NULL — l'historique/l'audit trail est préservé,
 // seule l'attribution nominative disparaît. user_roles cascade normalement.
 func (r *UserRepo) Delete(ctx context.Context, tenantID, userID string) error {

@@ -14,6 +14,7 @@ const AgentDetailPage = lazy(() => import('@/pages/AgentDetailPage'))
 const AlertsPage     = lazy(() => import('@/pages/AlertsPage'))
 const UsersPage      = lazy(() => import('@/pages/UsersPage'))
 const WorkspacesPage = lazy(() => import('@/pages/WorkspacesPage'))
+const SettingsPage   = lazy(() => import('@/pages/SettingsPage'))
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -57,6 +58,7 @@ export default function App() {
               <Route path="alerts"              element={<AlertsPage />}      />
               <Route path="users"               element={<UsersPage />}       />
               <Route path="workspaces"          element={<WorkspacesPage />}  />
+              <Route path="settings"            element={<SettingsPage />}    />
               {/* Routes futures */}
               <Route path="*"                   element={<Navigate to="/" replace />} />
             </Route>

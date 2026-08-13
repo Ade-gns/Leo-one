@@ -196,44 +196,6 @@ package http
 //         Resp 204
 //
 // ─────────────────────────────────────────────────────────────────────────────
-// TICKETS  [JWT requis]
-// ─────────────────────────────────────────────────────────────────────────────
-//
-//  GET    /api/v1/tickets
-//         Auth    : tickets:read
-//         Query   : ?status=&priority=&assigned_to=&agent_id=&cursor=&limit=
-//         Resp 200: {"data":[{Ticket}],"meta":{...}}
-//
-//  POST   /api/v1/tickets
-//         Auth    : tickets:write
-//         Body    : {
-//                     "title":       "Serveur Paris inaccessible",
-//                     "description": "...",
-//                     "priority":    "high",
-//                     "agent_id":    "...",   // optionnel
-//                     "alert_id":    "..."    // optionnel
-//                   }
-//         Resp 201: {"data":{Ticket}}
-//
-//  GET    /api/v1/tickets/:ticket_id
-//         Auth    : tickets:read
-//         Resp 200: {"data":{Ticket, "comments":[...]}}
-//
-//  PATCH  /api/v1/tickets/:ticket_id
-//         Auth    : tickets:write
-//         Body    : {"status":"...","priority":"...","assigned_to":"..."}
-//         Resp 200: {"data":{Ticket}}
-//
-//  DELETE /api/v1/tickets/:ticket_id
-//         Auth    : tickets:delete
-//         Resp 204
-//
-//  POST   /api/v1/tickets/:ticket_id/comments
-//         Auth    : tickets:write
-//         Body    : {"body":"Problème identifié, intervention en cours."}
-//         Resp 201: {"data":{Comment}}
-//
-// ─────────────────────────────────────────────────────────────────────────────
 // WORKSPACES  [JWT requis]
 // ─────────────────────────────────────────────────────────────────────────────
 //
@@ -369,7 +331,6 @@ package http
 //                       "agents_online":  142,
 //                       "alerts_open":    3,
 //                       "alerts_critical":1,
-//                       "tickets_open":   7,
 //                       "cpu_avg_percent": 34.2,
 //                       "ram_avg_percent": 61.0
 //                     }
@@ -467,16 +428,6 @@ func NewRouter(deps *Dependencies) http.Handler {
 				r.Post("/", RequirePermission("alerts", "write")(deps.AlertHandler.CreateRule))
 				r.Patch("/{ruleID}", RequirePermission("alerts", "write")(deps.AlertHandler.UpdateRule))
 				r.Delete("/{ruleID}", RequirePermission("alerts", "delete")(deps.AlertHandler.DeleteRule))
-			})
-
-			// Tickets
-			r.Route("/tickets", func(r chi.Router) {
-				r.Get("/", RequirePermission("tickets", "read")(deps.TicketHandler.List))
-				r.Post("/", RequirePermission("tickets", "write")(deps.TicketHandler.Create))
-				r.Get("/{ticketID}", RequirePermission("tickets", "read")(deps.TicketHandler.Get))
-				r.Patch("/{ticketID}", RequirePermission("tickets", "write")(deps.TicketHandler.Update))
-				r.Delete("/{ticketID}", RequirePermission("tickets", "delete")(deps.TicketHandler.Delete))
-				r.Post("/{ticketID}/comments", RequirePermission("tickets", "write")(deps.TicketHandler.AddComment))
 			})
 
 			// Workspaces
