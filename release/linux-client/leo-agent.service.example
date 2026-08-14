@@ -1,0 +1,26 @@
+# Leo-One — unité systemd pour l'agent (Linux)
+#
+# Installation :
+#   sudo cp leo-agent.service.example /etc/systemd/system/leo-agent.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now leo-agent
+#
+# Suppose que le binaire a été copié vers /opt/leo-one/agent/leo-agent
+# (voir README.md de ce dossier).
+
+[Unit]
+Description=Leo-One RMM Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/opt/leo-one/agent/leo-agent
+Restart=on-failure
+RestartSec=10
+User=root
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

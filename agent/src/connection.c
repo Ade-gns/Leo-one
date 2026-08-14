@@ -31,6 +31,17 @@
 #include <string.h>
 #include <unistd.h>
 #include <time.h>
+#include <errno.h>
+
+#ifdef _WIN32
+#  include <windows.h>
+#  define leo_sleep_ms(ms) Sleep(ms)
+#else
+static void leo_sleep_ms(unsigned ms) {
+    struct timespec ts = { .tv_sec = ms / 1000, .tv_nsec = (long)(ms % 1000) * 1000000L };
+    nanosleep(&ts, NULL);
+}
+#endif
 
 /* ─── Structure interne ─────────────────────────────────────────────────── */
 
@@ -74,6 +85,13 @@ struct leo_conn {
 
     /* Thread LWS */
     pthread_t        thread;
+    /* Signalé par _lws_thread juste avant de retourner — permet à
+     * leo_conn_destroy() d'attendre la fin du thread avec un timeout borné
+     * (pthread_cond_timedwait), sans dépendre de pthread_timedjoin_np qui
+     * est une extension glibc absente de winpthreads (mingw) et de macOS. */
+    pthread_mutex_t  exit_mutex;
+    pthread_cond_t   exit_cond;
+    bool             thread_exited;
 
     /* Callback utilisateur */
     leo_msg_handler_t handler;
@@ -331,8 +349,7 @@ static void *_lws_thread(void *arg) {
         {
             int elapsed = 0;
             while (!conn->should_stop && elapsed < conn->reconnect_delay_ms) {
-                struct timespec ts = { .tv_sec = 0, .tv_nsec = 100 * 1000000L };
-                nanosleep(&ts, NULL);
+                leo_sleep_ms(100);
                 elapsed += 100;
             }
         }
@@ -342,6 +359,11 @@ static void *_lws_thread(void *arg) {
         if (conn->reconnect_delay_ms > LEO_RECONNECT_MAX_MS)
             conn->reconnect_delay_ms = LEO_RECONNECT_MAX_MS;
     }
+
+    pthread_mutex_lock(&conn->exit_mutex);
+    conn->thread_exited = true;
+    pthread_cond_signal(&conn->exit_cond);
+    pthread_mutex_unlock(&conn->exit_mutex);
 
     LOG_INFO("Thread WSS terminé");
     return NULL;
@@ -406,12 +428,18 @@ leo_conn_t *leo_conn_create(const leo_config_t *cfg,
     conn->should_stop         = false;
 
     pthread_mutex_init(&conn->queue_mutex, NULL);
+    pthread_mutex_init(&conn->exit_mutex, NULL);
+    pthread_cond_init(&conn->exit_cond, NULL);
+    conn->thread_exited = false;
 
     if (!_parse_endpoint(cfg->ws_endpoint,
                          conn->host, sizeof(conn->host),
                          &conn->port,
                          conn->path, sizeof(conn->path))) {
         LOG_FATAL("ws_endpoint invalide : %s", cfg->ws_endpoint);
+        pthread_mutex_destroy(&conn->queue_mutex);
+        pthread_mutex_destroy(&conn->exit_mutex);
+        pthread_cond_destroy(&conn->exit_cond);
         free(conn);
         return NULL;
     }
@@ -421,6 +449,8 @@ leo_conn_t *leo_conn_create(const leo_config_t *cfg,
     if (pthread_create(&conn->thread, NULL, _lws_thread, conn) != 0) {
         LOG_FATAL("Impossible de créer le thread WSS");
         pthread_mutex_destroy(&conn->queue_mutex);
+        pthread_mutex_destroy(&conn->exit_mutex);
+        pthread_cond_destroy(&conn->exit_cond);
         free(conn);
         return NULL;
     }
@@ -478,16 +508,36 @@ bool leo_conn_destroy(leo_conn_t *conn) {
      * de la mémoire non-owned (ex: le leo_config_t d'un leo_agent_t) que le
      * thread encore actif va continuer à déréférencer, donc l'appelant ne
      * doit surtout pas libérer cette mémoire tant que le process tourne. */
-    struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
-    ts.tv_sec += 5;
-    if (pthread_timedjoin_np(conn->thread, NULL, &ts) != 0) {
+    /* Attente bornée portable (pthread_timedjoin_np est une extension glibc,
+     * absente de winpthreads/mingw et de macOS) : le thread signale sa fin
+     * sur exit_cond juste avant de retourner (voir _lws_thread), on attend
+     * ce signal avec un timeout plutôt que de joindre directement. */
+    struct timespec deadline;
+    clock_gettime(CLOCK_REALTIME, &deadline);
+    deadline.tv_sec += 5;
+
+    pthread_mutex_lock(&conn->exit_mutex);
+    while (!conn->thread_exited) {
+        if (pthread_cond_timedwait(&conn->exit_cond, &conn->exit_mutex, &deadline) == ETIMEDOUT)
+            break;
+    }
+    bool exited = conn->thread_exited;
+    pthread_mutex_unlock(&conn->exit_mutex);
+
+    if (!exited) {
         LOG_ERROR("Thread WSS non joignable après 5s — abandon (fuite volontaire, "
                   "évite un use-after-free si le thread est encore actif)");
         return false;
     }
 
+    /* Le thread a déjà signalé sa fin : ce join ne bloque pas de façon
+     * significative, il récupère juste ses ressources (évite un thread
+     * zombie). */
+    pthread_join(conn->thread, NULL);
+
     pthread_mutex_destroy(&conn->queue_mutex);
+    pthread_mutex_destroy(&conn->exit_mutex);
+    pthread_cond_destroy(&conn->exit_cond);
 
     LOG_INFO("Connexion WSS libérée");
     free(conn);

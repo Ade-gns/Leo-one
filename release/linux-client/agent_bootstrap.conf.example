@@ -1,0 +1,12 @@
+# Leo-One — configuration d'enrollment de l'agent (Linux)
+#
+# Copier ce fichier vers :
+#   /opt/leo-one/agent_bootstrap.conf
+#
+# Les deux valeurs ci-dessous sont fournies par l'interface d'administration
+# Leo-One : Machines -> "Générer un token d'enrollment".
+# Le token est à usage unique et expire après un délai court — génère-le
+# juste avant de démarrer l'agent sur le nouveau poste.
+
+enrollment_token=COLLE_ICI_LE_TOKEN_GENERE_DANS_L_INTERFACE
+api_endpoint=https://votre-serveur-leo-one.example.com

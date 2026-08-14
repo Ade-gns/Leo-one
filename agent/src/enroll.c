@@ -26,6 +26,7 @@
 
 #if defined(LEO_PLATFORM_WINDOWS)
 #  include <windows.h>
+#  include <winternl.h>
 #else
 #  include <unistd.h>
 #  include <sys/utsname.h>
@@ -118,9 +119,10 @@ static bool _parse_api_endpoint(const char *endpoint, bool *use_ssl,
 
 static void _detect_hostname(char *out, size_t sz) {
 #if defined(LEO_PLATFORM_WINDOWS)
-    /* TODO : GetComputerNameA — pas encore de support Windows dans l'agent
-     * (platform/windows/ n'est pas encore implémenté, voir CMakeLists.txt). */
-    snprintf(out, sz, "unknown-host");
+    DWORD len = (DWORD)sz;
+    if (!GetComputerNameA(out, &len)) {
+        snprintf(out, sz, "unknown-host");
+    }
 #else
     if (gethostname(out, sz) != 0) {
         snprintf(out, sz, "unknown-host");
@@ -130,7 +132,29 @@ static void _detect_hostname(char *out, size_t sz) {
 }
 
 static void _detect_os_version(char *out, size_t sz) {
-#if !defined(LEO_PLATFORM_WINDOWS)
+#if defined(LEO_PLATFORM_WINDOWS)
+    /* RtlGetVersion (ntdll) plutôt que GetVersionEx : GetVersionEx ment
+     * (plafonne à Windows 8) pour tout binaire sans manifeste d'application
+     * déclarant la compatibilité avec les versions récentes de Windows. */
+    typedef LONG (WINAPI *_RtlGetVersionFn)(PRTL_OSVERSIONINFOW);
+
+    HMODULE ntdll = GetModuleHandleA("ntdll.dll");
+    if (ntdll) {
+        _RtlGetVersionFn fn =
+            (_RtlGetVersionFn)(void *)GetProcAddress(ntdll, "RtlGetVersion");
+        if (fn) {
+            RTL_OSVERSIONINFOW info = {0};
+            info.dwOSVersionInfoSize = sizeof(info);
+            if (fn(&info) == 0) {
+                snprintf(out, sz, "%lu.%lu.%lu",
+                         (unsigned long)info.dwMajorVersion,
+                         (unsigned long)info.dwMinorVersion,
+                         (unsigned long)info.dwBuildNumber);
+                return;
+            }
+        }
+    }
+#else
     /* /etc/os-release (Linux) : PRETTY_NAME="Ubuntu 24.04.1 LTS" */
     FILE *fp = fopen("/etc/os-release", "r");
     if (fp) {
@@ -198,6 +222,27 @@ static leo_error_t _detect_hardware_id(char *out, size_t sz) {
     LOG_ERROR("Enrollment : impossible de lire un identifiant matériel stable "
               "(/etc/machine-id absent ou vide)");
     return LEO_ERR_SYSTEM;
+#elif defined(LEO_PLATFORM_WINDOWS)
+    /* MachineGuid : généré à l'installation de Windows, stable entre
+     * redémarrages, lisible sans privilège admin — équivalent Windows de
+     * /etc/machine-id. */
+    HKEY hkey;
+    LONG rc = RegOpenKeyExA(HKEY_LOCAL_MACHINE, "SOFTWARE\\Microsoft\\Cryptography",
+                             0, KEY_READ | KEY_WOW64_64KEY, &hkey);
+    if (rc != ERROR_SUCCESS) {
+        LOG_ERROR("Enrollment : ouverture de HKLM\\...\\Cryptography impossible (code %ld)", rc);
+        return LEO_ERR_SYSTEM;
+    }
+
+    DWORD buf_size = (DWORD)sz;
+    rc = RegGetValueA(hkey, NULL, "MachineGuid", RRF_RT_REG_SZ, NULL, out, &buf_size);
+    RegCloseKey(hkey);
+
+    if (rc != ERROR_SUCCESS || out[0] == '\0') {
+        LOG_ERROR("Enrollment : lecture de MachineGuid impossible (code %ld)", rc);
+        return LEO_ERR_SYSTEM;
+    }
+    return LEO_OK;
 #else
     (void)out; (void)sz;
     LOG_ERROR("Enrollment : détection de l'identifiant matériel non "

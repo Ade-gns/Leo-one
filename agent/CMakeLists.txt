@@ -45,8 +45,32 @@ elseif(TARGET_OS STREQUAL "windows" OR CMAKE_SYSTEM_NAME STREQUAL "Windows")
         platform/windows/service_win.c
         platform/windows/executor_win.c
         platform/windows/crypto_win.c
+        platform/windows/inventory_win.c
     )
     add_definitions(-DLEO_PLATFORM_WINDOWS)
+    # Cible Windows 7+ (0x0601) : nécessaire pour que <iphlpapi.h> déclare
+    # MIB_IF_TABLE2/GetIfTable2 (Vista+) utilisés par metrics_win.c — le
+    # défaut mingw-w64 est bien plus ancien. libwebsockets définit déjà la
+    # même valeur en interne (CMakeLists.txt:1248) mais uniquement pour ses
+    # propres sources ; la cible leo-agent (définie dans CE fichier, avant
+    # l'add_subdirectory plus bas) a besoin de sa propre définition.
+    add_definitions(-DWINVER=0x0601 -D_WIN32_WINNT=0x0601)
+    # Shim de casse pour la cross-compilation depuis un FS sensible à la
+    # casse (Linux) — voir cmake/mingw-case-shims/Psapi.h. Sans effet sur un
+    # FS insensible à la casse (Windows natif) : ajoute juste un répertoire
+    # de plus à l'include path. Injecté via CMAKE_C_FLAGS (pas
+    # include_directories()) pour s'appliquer aussi à libwebsockets,
+    # vendored et ajouté plus bas par add_subdirectory().
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -I${CMAKE_CURRENT_SOURCE_DIR}/cmake/mingw-case-shims")
+    # libwebsockets détecte correctement pthread.h disponible sous mingw-w64
+    # (variante posix, voir Threads::Threads plus bas) et active du code
+    # POSIX-threads (ex: lib/core-net/txpacer.c) en s'attendant à ce que
+    # <pthread.h> soit déjà inclus par un header amont — vrai sous Unix, pas
+    # sous sa propre chaîne de headers plat/windows (pensée pour ne PAS avoir
+    # pthread.h). -include force son inclusion dans chaque unité de
+    # compilation ; sans effet sur nos propres fichiers qui l'incluent déjà
+    # explicitement (garde d'inclusion standard).
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -include pthread.h")
 
 elseif(TARGET_OS STREQUAL "macos" OR CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     list(APPEND AGENT_COMMON_SOURCES
@@ -76,8 +100,12 @@ target_compile_options(leo-agent PRIVATE
 )
 target_link_options(leo-agent PRIVATE
     $<$<CONFIG:Debug>:-fsanitize=address,undefined>
-    -Wl,-z,relro -Wl,-z,now   # RELRO complet (Linux uniquement)
 )
+if(NOT WIN32)
+    # RELRO complet : flags GNU-ld/ELF, absents sous Windows (PE/COFF, pas de
+    # segment GNU_RELRO) — un -Wl,-z,relro y ferait échouer l'édition de liens.
+    target_link_options(leo-agent PRIVATE -Wl,-z,relro -Wl,-z,now)
+endif()
 
 target_include_directories(leo-agent PRIVATE
     include
@@ -101,6 +129,20 @@ set(LWS_WITH_HTTP3 OFF CACHE BOOL "" FORCE)
 # code : on ne veut pas qu'une future version de gcc casse notre build à
 # cause d'un warning dans du code qu'on ne maintient pas.
 set(DISABLE_WERROR ON CACHE BOOL "" FORCE)
+# Sous Windows, LWS_WITH_SCHANNEL est ON par défaut (SSL natif Windows) sauf
+# si un autre backend TLS est déjà sélectionné — mais on veut rester sur
+# OpenSSL (même raisonnement que LWS_WITH_HTTP3 ci-dessus : une seule
+# dépendance TLS à maintenir/auditer sur toutes les plateformes). Sans ce
+# FORCE, Schannel entraîne aussi la compilation de fonctionnalités qu'on
+# n'utilise pas (CGI/spawn de sous-processus par libwebsockets lui-même —
+# l'agent a sa propre implémentation dans platform/windows/executor_win.c).
+set(LWS_WITH_SCHANNEL OFF CACHE BOOL "" FORCE)
+# Les "minimal examples" sont ON par défaut (LWS_WITH_MINIMAL_EXAMPLES) et
+# construisent ~80 binaires de démo qu'on n'utilise jamais — coûteux à
+# builder, et l'un d'eux (api-test-ws-h2-txcredit, allocation de port de
+# test) échoue à créer son fichier de verrou en cross-compilation. On n'a
+# besoin que de la bibliothèque "websockets" elle-même, jamais des exemples.
+set(LWS_WITH_MINIMAL_EXAMPLES OFF CACHE BOOL "" FORCE)
 add_subdirectory(third_party/libwebsockets EXCLUDE_FROM_ALL)
 # La cible statique s'appelle "websockets" dans libwebsockets >= 4.x
 # ("websockets_static" est un nom d'une ancienne version, jamais buildé ici).
@@ -114,15 +156,28 @@ target_link_libraries(leo-agent PRIVATE Threads::Threads)
 find_package(OpenSSL REQUIRED)
 target_link_libraries(leo-agent PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 
+# Bibliothèques d'import Windows : ws2_32 (Winsock, requis par libwebsockets
+# et GetComputerNameA), crypt32/bcrypt (dépendances d'OpenSSL sur Windows),
+# advapi32 (Service Control Manager + registre), iphlpapi (GetIfTable2).
+if(WIN32)
+    target_link_libraries(leo-agent PRIVATE ws2_32 crypt32 bcrypt advapi32 iphlpapi)
+endif()
+
 # ─── Informations de version compilées dans le binaire ───────────────────────
 target_compile_definitions(leo-agent PRIVATE
     LEO_BUILD_VERSION="${CMAKE_PROJECT_VERSION}"
 )
 
 # ─── Installation ─────────────────────────────────────────────────────────────
-install(TARGETS leo-agent
-    RUNTIME DESTINATION /opt/leo-one/agent
-)
+# /opt/leo-one/agent n'a pas de sens sous Windows (pas de packaging/installeur
+# Windows pour l'instant — hors périmètre, voir CMakeLists.txt du backend/
+# frontend pour le reste du projet) : DESTINATION par défaut CMake (bin/) dans
+# ce cas plutôt qu'un chemin Unix appliqué aveuglément.
+if(WIN32)
+    install(TARGETS leo-agent RUNTIME DESTINATION bin)
+else()
+    install(TARGETS leo-agent RUNTIME DESTINATION /opt/leo-one/agent)
+endif()
 
 # ─── Strip du binaire en Release (réduit la surface d'analyse) ───────────────
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
