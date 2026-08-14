@@ -89,10 +89,11 @@ func SeedTenant(t *testing.T, pool *pgxpool.Pool, name string, maxAgents int) st
 
 // SeedSystemRoles crée les rôles système (Admin/Technicien/Lecture seule)
 // pour un tenant, via la fonction seed_system_roles() de migrations/
-// 003_rbac_seed.sql — c'est ce que ferait TenantHandler.Create à
-// l'enregistrement d'un nouveau tenant en production (pas encore implémenté,
-// StubHandler pour l'instant), donc les tests qui en ont besoin (rôles,
-// assignation de rôles à un utilisateur) l'appellent explicitement.
+// 003_rbac_seed.sql — c'est ce que ferait la création d'un tenant en
+// production (pas encore implémentée : TenantHandler n'a que Get/Update,
+// un tenant ne se crée pas en self-service), donc les tests qui en ont
+// besoin (rôles, assignation de rôles à un utilisateur) l'appellent
+// explicitement.
 func SeedSystemRoles(t *testing.T, pool *pgxpool.Pool, tenantID string) {
 	t.Helper()
 	if _, err := pool.Exec(context.Background(), `SELECT seed_system_roles($1)`, tenantID); err != nil {

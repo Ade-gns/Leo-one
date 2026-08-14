@@ -251,7 +251,7 @@ func (h *UserHandler) Delete(w http.ResponseWriter, r *http.Request) {
 //
 // Pas encore implémenté (TOTP : génération/chiffrement du secret, QR code,
 // codes de secours — une fonctionnalité à part entière, hors périmètre de
-// l'implémentation initiale de UserHandler). Renvoie 501, comme StubHandler.
+// l'implémentation initiale de UserHandler). Renvoie 501 (voir stub501).
 
 func (h *UserHandler) MFAEnable(w http.ResponseWriter, r *http.Request)  { stub501(w, r) }
 func (h *UserHandler) MFAConfirm(w http.ResponseWriter, r *http.Request) { stub501(w, r) }
