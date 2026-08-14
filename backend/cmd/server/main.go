@@ -28,6 +28,7 @@ import (
 	"github.com/yourorg/leo-one/internal/interfaces/http/handlers"
 	wsHandler "github.com/yourorg/leo-one/internal/interfaces/ws"
 	pkgauth "github.com/yourorg/leo-one/internal/pkg/auth"
+	"github.com/yourorg/leo-one/internal/scheduler"
 	"github.com/yourorg/leo-one/pkg/config"
 	"github.com/yourorg/leo-one/pkg/logger"
 	"github.com/yourorg/leo-one/pkg/pki"
@@ -146,6 +147,8 @@ func main() {
 	roleHandler := handlers.NewRoleHandler(pool)
 	workspaceHandler := handlers.NewWorkspaceHandler(workspaceRepo)
 	tenantHandler := handlers.NewTenantHandler(tenantRepo, agentRepo)
+	scriptHandler := handlers.NewScriptHandler(pool)
+	scheduleHandler := handlers.NewScheduleHandler(pool)
 
 	// Routeur API REST (Chi)
 	deps := &chiRouter.Dependencies{
@@ -160,6 +163,8 @@ func main() {
 		RoleHandler:       roleHandler,
 		TenantHandler:     tenantHandler,
 		EnrollmentHandler: enrollmentHandler,
+		ScriptHandler:     scriptHandler,
+		ScheduleHandler:   scheduleHandler,
 		JWTVerifier:       jwtVerifier,
 		TenantRepo:        tenantRepo,
 		Logger:            log,
@@ -216,12 +221,18 @@ func main() {
 		}
 	}()
 
+	// ── Scheduler de scripts programmés ─────────────────────────────────────
+	schedulerCtx, schedulerCancel := context.WithCancel(context.Background())
+	go scheduler.Run(schedulerCtx, pool, agentHandler, log)
+
 	// ── Attente du signal d'arrêt ──────────────────────────────────────────
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGTERM, syscall.SIGINT)
 	sig := <-quit
 
 	log.Info("Signal reçu — arrêt en cours", "signal", sig)
+
+	schedulerCancel()
 
 	// Graceful shutdown : 30 secondes max pour finir les requêtes en cours.
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)

@@ -24,6 +24,8 @@ type Dependencies struct {
 	RoleHandler       *handlers.RoleHandler
 	TenantHandler     *handlers.TenantHandler
 	EnrollmentHandler *handlers.EnrollmentHandler
+	ScriptHandler     *handlers.ScriptHandler
+	ScheduleHandler   *handlers.ScheduleHandler
 
 	// Infrastructure
 	JWTVerifier *pkgauth.JWTVerifier

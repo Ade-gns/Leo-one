@@ -3,6 +3,7 @@ import type { ApiResponse, PaginationParams } from '@/types/api'
 import type {
   Agent, AgentListFilter, Command,
   ExecScriptPayload, InstallPkgPayload, HardwareInventory, SoftwareItem,
+  BulkExecScriptPayload, BulkCommandResult,
 } from '@/types/agent'
 
 const BASE = '/api/v1/agents'
@@ -29,6 +30,14 @@ export const agentsApi = {
   installPkg: (agentID: string, payload: InstallPkgPayload) =>
     post<ApiResponse<Command>>(`${BASE}/${agentID}/commands`, {
       type: 'install_pkg',
+      payload,
+    }),
+
+  bulkExecScript: ({ agent_ids, workspace_id, ...payload }: BulkExecScriptPayload) =>
+    post<ApiResponse<BulkCommandResult[]>>(`${BASE}/bulk-commands`, {
+      agent_ids,
+      workspace_id,
+      type: 'exec_script',
       payload,
     }),
 

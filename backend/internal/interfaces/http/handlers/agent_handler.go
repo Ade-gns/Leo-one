@@ -1,10 +1,12 @@
 package handlers
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -387,6 +389,61 @@ var commandWSType = map[string]int{
 	"ping":              105, // LEO_MSG_PING
 }
 
+// CreateAndDispatchCommand insère une commande en BDD et l'envoie
+// immédiatement si l'agent est connecté. Partagé par CreateCommand (un seul
+// agent), BulkCreateCommand (plusieurs agents ou un workspace entier), et le
+// scheduler de scripts programmés (internal/scheduler — d'où l'export).
+// N'effectue PAS la vérification d'appartenance au tenant : à la charge de
+// l'appelant (CreateCommand la fait via agentRepo.FindByID ; BulkCreateCommand
+// et le scheduler la font en amont via la requête SQL qui résout les IDs
+// cibles, toujours filtrée par tenant_id).
+// userID/scheduleID sont nullable : userID est nil pour une commande
+// déclenchée par le scheduler (pas d'utilisateur à l'origine) ; scheduleID
+// est nil pour toute commande ad-hoc (création manuelle ou envoi groupé).
+func (h *AgentHandler) CreateAndDispatchCommand(
+	ctx context.Context, tenantID, agentID string, userID, scheduleID *string, cmdType string, payload json.RawMessage,
+) (commandID string, sent bool, err error) {
+	wsType, ok := commandWSType[cmdType]
+	if !ok {
+		return "", false, fmt.Errorf("type de commande inconnu : %s", cmdType)
+	}
+
+	commandID = uuid.New().String()
+	if len(payload) == 0 {
+		payload = json.RawMessage(`{}`)
+	}
+
+	if _, err = h.pool.Exec(ctx, `
+		INSERT INTO commands (id, tenant_id, agent_id, created_by, schedule_id, type, payload, status, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', NOW())
+	`, commandID, tenantID, agentID, userID, scheduleID, cmdType, payload); err != nil {
+		return "", false, err
+	}
+
+	sent = h.hub.IsConnected(agentID)
+	if sent {
+		// body = payload tel quel : l'agent C attend les champs de la commande
+		// (ex: interpreter/script/timeout_sec pour exec_script) directement à
+		// la racine de "body", pas sous un wrapper command_id/type/payload —
+		// command_id est déjà porté par le champ "id" de l'enveloppe.
+		cmdMsg := map[string]any{
+			"v":    1,
+			"type": wsType,
+			"id":   commandID,
+			"ts":   time.Now().UnixMilli(),
+			"body": payload,
+		}
+		h.hub.SendToAgent(agentID, cmdMsg)
+
+		// Marquer comme envoyé
+		_, _ = h.pool.Exec(ctx, `
+			UPDATE commands SET sent_at = NOW() WHERE id = $1
+		`, commandID)
+	}
+
+	return commandID, sent, nil
+}
+
 // CreateCommand crée une commande pour un agent et l'envoie si l'agent est connecté.
 //
 //	POST /api/v1/agents/:agentID/commands
@@ -412,55 +469,124 @@ func (h *AgentHandler) CreateCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	wsType, ok := commandWSType[req.Type]
-	if !ok {
+	if _, ok := commandWSType[req.Type]; !ok {
 		response.Error(w, http.StatusBadRequest, "VALIDATION_ERROR", "type de commande inconnu : "+req.Type)
 		return
 	}
 
-	commandID := uuid.New().String()
-	payload := req.Payload
-	if len(payload) == 0 {
-		payload = json.RawMessage(`{}`)
-	}
-
-	// Insérer la commande en BDD
-	_, err = h.pool.Exec(r.Context(), `
-		INSERT INTO commands (id, tenant_id, agent_id, created_by, type, payload, status, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, 'pending', NOW())
-	`, commandID, tenantID, agentID, userID, req.Type, payload)
+	commandID, sent, err := h.CreateAndDispatchCommand(r.Context(), tenantID, agentID, &userID, nil, req.Type, req.Payload)
 	if err != nil {
 		response.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "erreur lors de la création de la commande")
 		return
 	}
 
-	// Envoyer à l'agent si connecté
-	agentOnline := h.hub.IsConnected(agentID)
-	if agentOnline {
-		// body = payload tel quel : l'agent C attend les champs de la commande
-		// (ex: interpreter/script/timeout_sec pour exec_script) directement à
-		// la racine de "body", pas sous un wrapper command_id/type/payload —
-		// command_id est déjà porté par le champ "id" de l'enveloppe.
-		cmdMsg := map[string]any{
-			"v":    1,
-			"type": wsType,
-			"id":   commandID,
-			"ts":   time.Now().UnixMilli(),
-			"body": payload,
-		}
-		h.hub.SendToAgent(agentID, cmdMsg)
-
-		// Marquer comme envoyé
-		_, _ = h.pool.Exec(r.Context(), `
-			UPDATE commands SET sent_at = NOW() WHERE id = $1
-		`, commandID)
-	}
-
 	response.JSON(w, http.StatusAccepted, map[string]any{
 		"command_id": commandID,
 		"status":     "pending",
-		"sent":       agentOnline,
+		"sent":       sent,
 	})
+}
+
+// scanAgentIDs consomme un pgx.Rows d'une seule colonne "id" et le referme.
+func scanAgentIDs(rows pgx.Rows) ([]string, error) {
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+type bulkCreateCommandRequest struct {
+	AgentIDs    []string        `json:"agent_ids"`
+	WorkspaceID *string         `json:"workspace_id"`
+	Type        string          `json:"type"`
+	Payload     json.RawMessage `json:"payload"`
+}
+
+type bulkCommandResult struct {
+	AgentID   string `json:"agent_id"`
+	CommandID string `json:"command_id,omitempty"`
+	Sent      bool   `json:"sent"`
+	Error     string `json:"error,omitempty"`
+}
+
+// BulkCreateCommand crée et envoie une même commande vers plusieurs agents à
+// la fois — soit une liste explicite (agent_ids), soit tous les agents d'un
+// workspace (workspace_id). Réutilise createAndDispatchCommand par agent
+// cible ; un échec sur un agent n'empêche pas les autres d'être traités.
+//
+//	POST /api/v1/agents/bulk-commands
+func (h *AgentHandler) BulkCreateCommand(w http.ResponseWriter, r *http.Request) {
+	tenantID := httpctx.TenantIDFromContext(r.Context())
+	userID := httpctx.UserIDFromContext(r.Context())
+
+	var req bulkCreateCommandRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.Error(w, http.StatusBadRequest, "VALIDATION_ERROR", "corps de requête invalide")
+		return
+	}
+
+	if _, ok := commandWSType[req.Type]; !ok {
+		response.Error(w, http.StatusBadRequest, "VALIDATION_ERROR", "type de commande inconnu : "+req.Type)
+		return
+	}
+
+	hasAgentIDs := len(req.AgentIDs) > 0
+	hasWorkspace := req.WorkspaceID != nil && *req.WorkspaceID != ""
+	if hasAgentIDs == hasWorkspace {
+		response.Error(w, http.StatusBadRequest, "VALIDATION_ERROR",
+			"préciser soit agent_ids, soit workspace_id (l'un des deux, pas les deux)")
+		return
+	}
+
+	var (
+		targetIDs []string
+		err       error
+	)
+	if hasAgentIDs {
+		// Ne jamais faire confiance à une liste d'IDs fournie par le client :
+		// filtrée pour ne garder que les agents appartenant réellement au tenant.
+		var rows pgx.Rows
+		rows, err = h.pool.Query(r.Context(), `
+			SELECT id FROM agents WHERE tenant_id = $1 AND id = ANY($2)
+		`, tenantID, req.AgentIDs)
+		if err == nil {
+			targetIDs, err = scanAgentIDs(rows)
+		}
+	} else {
+		var rows pgx.Rows
+		rows, err = h.pool.Query(r.Context(), `
+			SELECT id FROM agents WHERE tenant_id = $1 AND workspace_id = $2
+		`, tenantID, *req.WorkspaceID)
+		if err == nil {
+			targetIDs, err = scanAgentIDs(rows)
+		}
+	}
+	if err != nil {
+		response.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "erreur de base de données")
+		return
+	}
+	if len(targetIDs) == 0 {
+		response.Error(w, http.StatusBadRequest, "VALIDATION_ERROR", "aucun agent cible trouvé")
+		return
+	}
+
+	results := make([]bulkCommandResult, 0, len(targetIDs))
+	for _, agentID := range targetIDs {
+		commandID, sent, err := h.CreateAndDispatchCommand(r.Context(), tenantID, agentID, &userID, nil, req.Type, req.Payload)
+		if err != nil {
+			results = append(results, bulkCommandResult{AgentID: agentID, Error: err.Error()})
+			continue
+		}
+		results = append(results, bulkCommandResult{AgentID: agentID, CommandID: commandID, Sent: sent})
+	}
+
+	response.JSON(w, http.StatusAccepted, results)
 }
 
 // ListCommands liste les commandes d'un agent.

@@ -4,7 +4,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { agentsApi } from '@/api/agents'
 import type { AgentListFilter } from '@/types/agent'
-import type { ExecScriptPayload, InstallPkgPayload } from '@/types/agent'
+import type { ExecScriptPayload, InstallPkgPayload, BulkExecScriptPayload } from '@/types/agent'
 
 export const agentKeys = {
   all:     ['agents'] as const,
@@ -41,6 +41,19 @@ export function useExecScript(agentID: string) {
     mutationFn: (payload: ExecScriptPayload) => agentsApi.execScript(agentID, payload),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: agentKeys.commands(agentID) })
+    },
+  })
+}
+
+/** Mutation : exécution d'un script sur plusieurs agents (ou un workspace entier) à la fois */
+export function useBulkExecScript() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (payload: BulkExecScriptPayload) => agentsApi.bulkExecScript(payload),
+    onSuccess: () => {
+      // Chaque agent ciblé a potentiellement une nouvelle commande en cours —
+      // invalider la liste globale (pas de clé par-agent connue à l'avance ici).
+      qc.invalidateQueries({ queryKey: agentKeys.all })
     },
   })
 }

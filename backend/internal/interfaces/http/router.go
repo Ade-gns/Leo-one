@@ -120,6 +120,16 @@ package http
 //         Auth    : agents:read
 //         Resp 200: {"data":{Command}}  (inclut stdout, stderr, exit_code)
 //
+//  POST   /api/v1/agents/bulk-commands
+//         Auth    : agents:execute
+//         Body    : {
+//                     "agent_ids":    ["...","..."],  // OU workspace_id — l'un des deux
+//                     "workspace_id": null,
+//                     "type":         "exec_script",
+//                     "payload":      { "interpreter": "powershell", "script": "...", "timeout_sec": 30 }
+//                   }
+//         Resp 202: {"data":[{"agent_id":"...","command_id":"...","sent":true}, ...]}
+//
 //  GET    /api/v1/agents/:agent_id/inventory/hardware
 //         Auth    : inventory:read
 //         Resp 200: {"data":{HardwareInventory}}
@@ -307,6 +317,58 @@ package http
 //         Resp 200: {"data":[{Permission}]}
 //
 // ─────────────────────────────────────────────────────────────────────────────
+// SCRIPTS (bibliothèque)  [JWT requis — permission scripts:*]
+// ─────────────────────────────────────────────────────────────────────────────
+//
+//  GET    /api/v1/scripts
+//         Auth    : scripts:read
+//         Resp 200: {"data":[{Script}]}
+//
+//  POST   /api/v1/scripts
+//         Auth    : scripts:write
+//         Body    : {"name":"...","interpreter":"powershell","content":"..."}
+//         Resp 201: {"data":{Script}}
+//
+//  PATCH  /api/v1/scripts/:script_id
+//         Auth    : scripts:write
+//         Resp 200: {"data":{Script}}
+//
+//  DELETE /api/v1/scripts/:script_id
+//         Auth    : scripts:delete
+//         Resp 204
+//
+// ─────────────────────────────────────────────────────────────────────────────
+// PLANIFICATIONS DE SCRIPTS (récurrentes, cron)  [JWT requis — permission scripts:*]
+// ─────────────────────────────────────────────────────────────────────────────
+//
+//  GET    /api/v1/script-schedules
+//         Auth    : scripts:read
+//         Resp 200: {"data":[{ScriptSchedule}]}
+//
+//  POST   /api/v1/script-schedules
+//         Auth    : scripts:write
+//         Body    : {
+//                     "script_id":       "...",
+//                     "name":            "Nettoyage nocturne",
+//                     "agent_id":        null,      // XOR workspace_id
+//                     "workspace_id":    "...",
+//                     "cron_expression": "0 2 * * *",
+//                     "timeout_sec":     60
+//                   }
+//         Resp 201: {"data":{ScriptSchedule}}
+//         Note    : cron_expression validée (format standard à 5 champs) ;
+//                   next_run_at calculé automatiquement à la création
+//
+//  PATCH  /api/v1/script-schedules/:schedule_id
+//         Auth    : scripts:write
+//         Body    : champs optionnels, dont "enabled" pour activer/désactiver
+//         Resp 200: {"data":{ScriptSchedule}}
+//
+//  DELETE /api/v1/script-schedules/:schedule_id
+//         Auth    : scripts:delete
+//         Resp 204
+//
+// ─────────────────────────────────────────────────────────────────────────────
 // TENANT (paramètres du compte)  [JWT requis — permission tenant:read/write]
 // ─────────────────────────────────────────────────────────────────────────────
 //
@@ -400,6 +462,7 @@ func NewRouter(deps *Dependencies) http.Handler {
 				r.Post("/{agentID}/commands", RequirePermission("agents", "execute")(deps.AgentHandler.CreateCommand))
 				r.Get("/{agentID}/commands", RequirePermission("agents", "read")(deps.AgentHandler.ListCommands))
 				r.Get("/{agentID}/commands/{commandID}", RequirePermission("agents", "read")(deps.AgentHandler.GetCommand))
+				r.Post("/bulk-commands", RequirePermission("agents", "execute")(deps.AgentHandler.BulkCreateCommand))
 				r.Post("/{agentID}/wake-up", RequirePermission("agents", "execute")(deps.AgentHandler.WakeUp))
 
 				r.Get("/{agentID}/metrics", RequirePermission("metrics", "read")(deps.MetricHandler.Query))
@@ -460,6 +523,22 @@ func NewRouter(deps *Dependencies) http.Handler {
 				r.Delete("/{roleID}", RequirePermission("users", "write")(deps.RoleHandler.Delete))
 			})
 			r.Get("/permissions", RequirePermission("users", "read")(deps.RoleHandler.ListPermissions))
+
+			// Bibliothèque de scripts
+			r.Route("/scripts", func(r chi.Router) {
+				r.Get("/", RequirePermission("scripts", "read")(deps.ScriptHandler.List))
+				r.Post("/", RequirePermission("scripts", "write")(deps.ScriptHandler.Create))
+				r.Patch("/{scriptID}", RequirePermission("scripts", "write")(deps.ScriptHandler.Update))
+				r.Delete("/{scriptID}", RequirePermission("scripts", "delete")(deps.ScriptHandler.Delete))
+			})
+
+			// Planifications récurrentes de scripts
+			r.Route("/script-schedules", func(r chi.Router) {
+				r.Get("/", RequirePermission("scripts", "read")(deps.ScheduleHandler.List))
+				r.Post("/", RequirePermission("scripts", "write")(deps.ScheduleHandler.Create))
+				r.Patch("/{scheduleID}", RequirePermission("scripts", "write")(deps.ScheduleHandler.Update))
+				r.Delete("/{scheduleID}", RequirePermission("scripts", "delete")(deps.ScheduleHandler.Delete))
+			})
 
 			// Tenant
 			r.Get("/tenant", RequirePermission("tenant", "read")(deps.TenantHandler.Get))

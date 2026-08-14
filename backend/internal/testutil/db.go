@@ -14,6 +14,12 @@ import (
 
 const defaultTestDatabaseURL = "postgres://leo:leo_dev@localhost:5432/leo_one_test?sslmode=disable"
 
+// testDBLockKey identifie le verrou consultatif Postgres (pg_advisory_lock)
+// qui sérialise l'accès à la base de test entre packages — voir le
+// commentaire sur son acquisition dans TestDB. Valeur arbitraire, doit juste
+// être stable et partagée par tous les appelants visant la même base.
+const testDBLockKey = 894127001
+
 var (
 	poolOnce sync.Once
 	pool     *pgxpool.Pool
@@ -60,6 +66,36 @@ func TestDB(t *testing.T) *pgxpool.Pool {
 		t.Skipf("base de test Postgres indisponible (%v) — voir TEST_DATABASE_URL", poolErr)
 	}
 
+	// `go test ./...` lance un processus séparé par package, chacun avec son
+	// propre pool (poolOnce/pool sont des singletons PAR PROCESSUS), mais
+	// tous les packages de tests d'intégration visent la même base
+	// leo_one_test. Sans synchronisation inter-processus, deux packages dont
+	// les tests touchent la BDD en parallèle (ex: handlers + scheduler)
+	// peuvent se TRUNCATEr mutuellement en cours de test, ou provoquer un
+	// deadlock Postgres (SQLSTATE 40P01) — observé en pratique dès qu'un
+	// deuxième package a commencé à écrire dans la base de test. Un verrou
+	// consultatif Postgres, tenu le temps du test courant, sérialise cet
+	// accès entre processus sans affecter la vitesse des tests au sein d'un
+	// même package (déjà séquentiels par défaut, sans t.Parallel()).
+	//
+	// Pris sur une connexion dédiée (pool.Acquire), pas via pool.Exec : un
+	// verrou consultatif de session est lié à LA connexion qui l'a pris, et
+	// pool.Exec peut resservir une connexion différente pour le libérer —
+	// ce qui laisserait le verrou tenu indéfiniment sur la connexion
+	// d'origine, remise dans le pool, bloquant tous les tests suivants.
+	conn, err := pool.Acquire(context.Background())
+	if err != nil {
+		t.Fatalf("échec d'acquisition d'une connexion pour le verrou de test : %v", err)
+	}
+	if _, err := conn.Exec(context.Background(), `SELECT pg_advisory_lock($1)`, testDBLockKey); err != nil {
+		conn.Release()
+		t.Fatalf("échec d'acquisition du verrou de test : %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = conn.Exec(context.Background(), `SELECT pg_advisory_unlock($1)`, testDBLockKey)
+		conn.Release()
+	})
+
 	// tenants est le point d'ancrage de tout le schéma multi-tenant : toutes
 	// les tables scopées par tenant référencent tenants(id) ON DELETE CASCADE
 	// (voir migrations/001_init_schema.sql), donc un seul TRUNCATE CASCADE
@@ -99,6 +135,43 @@ func SeedSystemRoles(t *testing.T, pool *pgxpool.Pool, tenantID string) {
 	if _, err := pool.Exec(context.Background(), `SELECT seed_system_roles($1)`, tenantID); err != nil {
 		t.Fatalf("SeedSystemRoles a échoué : %v", err)
 	}
+}
+
+// SeedUser insère un utilisateur minimal pour les tests et retourne son ID
+// — nécessaire pour tout test touchant une colonne created_by (scripts,
+// script_schedules, commands…), qui référence users(id) par clé étrangère :
+// une chaîne vide ou un UUID inventé y échoue à l'insertion.
+func SeedUser(t *testing.T, pool *pgxpool.Pool, tenantID, email string) string {
+	t.Helper()
+
+	var id string
+	err := pool.QueryRow(context.Background(), `
+		INSERT INTO users (tenant_id, email, password_hash, full_name)
+		VALUES ($1, $2, 'x', 'Test User')
+		RETURNING id
+	`, tenantID, email).Scan(&id)
+	if err != nil {
+		t.Fatalf("SeedUser a échoué : %v", err)
+	}
+	return id
+}
+
+// SeedAgent insère un agent minimal pour les tests et retourne son ID —
+// nécessaire pour tout test touchant une colonne agent_id qui référence
+// agents(id) par clé étrangère (script_schedules, commands…).
+func SeedAgent(t *testing.T, pool *pgxpool.Pool, tenantID, hostname string) string {
+	t.Helper()
+
+	var id string
+	err := pool.QueryRow(context.Background(), `
+		INSERT INTO agents (tenant_id, hostname, os, os_version, arch, hardware_id, agent_version)
+		VALUES ($1, $2, 'linux', '24.04', 'amd64', $3, '1.0.0')
+		RETURNING id
+	`, tenantID, hostname, hostname+"-hwid").Scan(&id)
+	if err != nil {
+		t.Fatalf("SeedAgent a échoué : %v", err)
+	}
+	return id
 }
 
 // slugify produit un slug suffisamment unique pour l'usage des tests (pas

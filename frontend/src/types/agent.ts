@@ -42,7 +42,7 @@ export interface Command {
 }
 
 export interface ExecScriptPayload {
-  interpreter: 'powershell' | 'bash' | 'cmd' | 'python'
+  interpreter: 'powershell' | 'bash' | 'sh' | 'cmd' | 'python'
   script:      string
   // Nom de champ singulier — doit correspondre exactement à ce que lit
   // l'agent C (cJSON_GetObjectItemCaseSensitive(body, "timeout_sec"), voir
@@ -55,6 +55,20 @@ export interface ExecScriptPayload {
 export interface InstallPkgPayload {
   packages:    string[]
   timeout_sec?: number
+}
+
+/** Cible d'un envoi groupé : soit une liste d'agents, soit un workspace entier. */
+export type BulkCommandTarget =
+  | { agent_ids: string[]; workspace_id?: undefined }
+  | { agent_ids?: undefined; workspace_id: string }
+
+export type BulkExecScriptPayload = BulkCommandTarget & ExecScriptPayload
+
+export interface BulkCommandResult {
+  agent_id:    string
+  command_id?: string
+  sent:        boolean
+  error?:      string
 }
 
 export interface HardwareInventory {

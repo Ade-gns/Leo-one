@@ -8,6 +8,8 @@ import { formatDistanceToNow } from 'date-fns'
 import { fr } from 'date-fns/locale'
 import { useAgents, useDeleteAgent } from '@/hooks/useAgents'
 import { AgentStatusBadge } from './AgentStatusBadge'
+import { BulkCommandModal } from './BulkCommandModal'
+import { cn } from '@/lib/utils'
 import type { AgentStatus, AgentOS } from '@/types/agent'
 
 const OS_ICONS: Record<AgentOS, string> = {
@@ -21,6 +23,9 @@ export function AgentTable() {
   const [statusFilter, setStatusFilter] = useState<AgentStatus | ''>('')
   const [search, setSearch]             = useState('')
 
+  const [selected, setSelected]         = useState<Set<string>>(new Set())
+  const [showBulkModal, setShowBulkModal] = useState(false)
+
   const { data, isLoading, refetch } = useAgents(
     statusFilter ? { status: statusFilter } : undefined,
   )
@@ -33,6 +38,29 @@ export function AgentTable() {
         (a.ip_address ?? '').includes(search),
       )
     : agents
+
+  const toggleOne = (id: string) => {
+    setSelected(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const allFilteredSelected = filtered.length > 0 && filtered.every(a => selected.has(a.id))
+  const toggleAll = () => {
+    setSelected(prev => {
+      if (allFilteredSelected) {
+        const next = new Set(prev)
+        filtered.forEach(a => next.delete(a.id))
+        return next
+      }
+      const next = new Set(prev)
+      filtered.forEach(a => next.add(a.id))
+      return next
+    })
+  }
 
   return (
     <div className="flex flex-col gap-4">
@@ -59,9 +87,22 @@ export function AgentTable() {
           <option value="unresponsive">Inaccessible</option>
         </select>
 
+        {selected.size > 0 && (
+          <button
+            onClick={() => setShowBulkModal(true)}
+            className="flex items-center gap-2 rounded-lg bg-brand-900 px-3 py-2 text-sm font-semibold text-white hover:bg-brand-700"
+          >
+            <Terminal className="h-4 w-4" />
+            Exécuter un script sur {selected.size} machine{selected.size > 1 ? 's' : ''}
+          </button>
+        )}
+
         <button
           onClick={() => refetch()}
-          className="ml-auto flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-600 hover:bg-gray-50"
+          className={cn(
+            'flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-600 hover:bg-gray-50',
+            selected.size === 0 && 'ml-auto',
+          )}
         >
           <RefreshCw className="h-4 w-4" />
           Actualiser
@@ -73,6 +114,14 @@ export function AgentTable() {
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-gray-100 bg-gray-50">
+              <th className="w-10 px-4 py-3">
+                <input
+                  type="checkbox"
+                  checked={allFilteredSelected}
+                  onChange={toggleAll}
+                  className="h-4 w-4 rounded border-gray-300 text-brand-600 focus:ring-brand-500"
+                />
+              </th>
               <th className="px-4 py-3 text-left font-semibold text-gray-600">Machine</th>
               <th className="px-4 py-3 text-left font-semibold text-gray-600">OS</th>
               <th className="px-4 py-3 text-left font-semibold text-gray-600">Adresse IP</th>
@@ -85,7 +134,7 @@ export function AgentTable() {
             {isLoading && (
               Array.from({ length: 5 }).map((_, i) => (
                 <tr key={i} className="border-b border-gray-50">
-                  {Array.from({ length: 6 }).map((_, j) => (
+                  {Array.from({ length: 7 }).map((_, j) => (
                     <td key={j} className="px-4 py-3">
                       <div className="h-4 w-full animate-pulse rounded bg-gray-100" />
                     </td>
@@ -96,7 +145,7 @@ export function AgentTable() {
 
             {!isLoading && filtered.length === 0 && (
               <tr>
-                <td colSpan={6} className="px-4 py-12 text-center text-gray-400">
+                <td colSpan={7} className="px-4 py-12 text-center text-gray-400">
                   <Monitor className="mx-auto h-8 w-8 mb-2 opacity-40" />
                   Aucune machine trouvée
                 </td>
@@ -109,6 +158,14 @@ export function AgentTable() {
                 className="border-b border-gray-50 hover:bg-gray-50 cursor-pointer"
                 onClick={() => navigate(`/agents/${agent.id}`)}
               >
+                <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
+                  <input
+                    type="checkbox"
+                    checked={selected.has(agent.id)}
+                    onChange={() => toggleOne(agent.id)}
+                    className="h-4 w-4 rounded border-gray-300 text-brand-600 focus:ring-brand-500"
+                  />
+                </td>
                 <td className="px-4 py-3 font-medium text-gray-900">{agent.hostname}</td>
                 <td className="px-4 py-3 text-gray-500">
                   <span title={`${agent.os} ${agent.os_version}`}>
@@ -159,6 +216,13 @@ export function AgentTable() {
           </div>
         )}
       </div>
+
+      {showBulkModal && (
+        <BulkCommandModal
+          selectedAgentIds={Array.from(selected)}
+          onClose={() => setShowBulkModal(false)}
+        />
+      )}
     </div>
   )
 }

@@ -18,6 +18,7 @@ const SHELLS: { value: Interpreter; label: string }[] = [
 
 const PLACEHOLDERS: Record<Interpreter, string> = {
   bash:       '#!/bin/bash\necho "Hello from Leo-One"',
+  sh:         '#!/bin/sh\necho "Hello from Leo-One"',
   powershell: 'Write-Output "Hello from Leo-One"',
   cmd:        'echo Hello from Leo-One',
   python:     'print("Hello from Leo-One")',

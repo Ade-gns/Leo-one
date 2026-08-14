@@ -212,6 +212,86 @@ func (d *Dispatcher) handleHello(client *Client, env envelope, log *slog.Logger)
 		},
 	}
 	client.Send(ack)
+
+	d.redeliverPendingCommands(client, log)
+}
+
+// pendingCommandWSType mappe le command_type SQL vers le type numérique du
+// protocole agent (voir leo_agent.h — LEO_MSG_*). Même mapping que
+// commandWSType dans interfaces/http/handlers/agent_handler.go — dupliqué
+// ici plutôt que partagé via un import : package différent, 5 entrées
+// statiques, pas assez pour justifier un couplage inter-packages.
+var pendingCommandWSType = map[string]int{
+	"exec_script":       101, // LEO_MSG_EXEC_SCRIPT
+	"install_pkg":       102, // LEO_MSG_INSTALL_PKG
+	"reboot":            103, // LEO_MSG_REBOOT
+	"collect_inventory": 104, // LEO_MSG_COLLECT_INVENTORY
+	"ping":              105, // LEO_MSG_PING
+}
+
+// redeliverPendingCommands renvoie à l'agent, à sa (re)connexion, les
+// commandes créées pendant qu'il était hors ligne (jamais transmises —
+// sent_at NULL). Sans ceci, une commande créée alors que le poste est
+// éteint/en veille (typiquement une exécution planifiée) ne serait jamais
+// délivrée : CreateCommand ne l'envoie que si l'agent est connecté au
+// moment de la création, et rien d'autre ne retente l'envoi par la suite.
+func (d *Dispatcher) redeliverPendingCommands(client *Client, log *slog.Logger) {
+	rows, err := d.pool.Query(context.Background(), `
+		SELECT id, type, payload FROM commands
+		WHERE agent_id = $1 AND status = 'pending' AND sent_at IS NULL
+		ORDER BY created_at
+	`, client.AgentID)
+	if err != nil {
+		log.Error("Échec lecture des commandes en attente", "error", err)
+		return
+	}
+
+	type pendingCommand struct {
+		id      string
+		cmdType string
+		payload json.RawMessage
+	}
+	var toSend []pendingCommand
+	for rows.Next() {
+		var p pendingCommand
+		if err := rows.Scan(&p.id, &p.cmdType, &p.payload); err != nil {
+			log.Error("Échec lecture d'une commande en attente", "error", err)
+			continue
+		}
+		toSend = append(toSend, p)
+	}
+	rowsErr := rows.Err()
+	rows.Close()
+	if rowsErr != nil {
+		log.Error("Échec lecture des commandes en attente", "error", rowsErr)
+		return
+	}
+
+	for _, p := range toSend {
+		wsType, ok := pendingCommandWSType[p.cmdType]
+		if !ok {
+			log.Warn("Commande en attente de type inconnu — ignorée", "command_id", p.id, "type", p.cmdType)
+			continue
+		}
+
+		client.Send(map[string]any{
+			"v":    1,
+			"type": wsType,
+			"id":   p.id,
+			"ts":   time.Now().UnixMilli(),
+			"body": p.payload,
+		})
+
+		if _, err := d.pool.Exec(context.Background(), `
+			UPDATE commands SET sent_at = NOW() WHERE id = $1
+		`, p.id); err != nil {
+			log.Error("Échec marquage sent_at sur redélivrance", "command_id", p.id, "error", err)
+		}
+	}
+
+	if len(toSend) > 0 {
+		log.Info("Commandes en attente redélivrées", "count", len(toSend))
+	}
 }
 
 func (d *Dispatcher) handleHeartbeat(client *Client, env envelope, log *slog.Logger) {
