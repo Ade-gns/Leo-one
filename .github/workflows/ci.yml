@@ -68,7 +68,8 @@ jobs:
         run: go test ./... -v
 
   # ───────────────────────────────────────────────────────────────────────
-  # Frontend React/TS : lint, type-check + build (tsc --noEmit && vite build)
+  # Frontend React/TS : lint, tests (Vitest + Testing Library), type-check
+  # + build (tsc --noEmit && vite build)
   # ───────────────────────────────────────────────────────────────────────
   frontend:
     runs-on: ubuntu-latest
@@ -86,6 +87,7 @@ jobs:
 
       - run: npm ci
       - run: npm run lint
+      - run: npm run test
       - run: npm run build
 
   # ───────────────────────────────────────────────────────────────────────
