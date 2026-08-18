@@ -145,6 +145,45 @@ package http
 //         Resp 200: {"data":[{SoftwareItem}],"meta":{...}}
 //
 // ─────────────────────────────────────────────────────────────────────────────
+// PATCHS (gestion des mises à jour)  [JWT requis — permission patches:*]
+// ─────────────────────────────────────────────────────────────────────────────
+//
+//  GET    /api/v1/agents/:agent_id/patches
+//         Auth    : patches:read
+//         Query   : ?status=available|installed|ignored|failed&cursor=&limit=
+//         Resp 200: {"data":[{Patch}],"meta":{"cursor":"..."}}
+//
+//  POST   /api/v1/agents/:agent_id/patches/install
+//         Auth    : patches:execute
+//         Body    : {"patch_ids": ["KB5031354", "..."], "reboot_after": false}
+//         Resp 202: {"data":{"command_id":"...","status":"pending","sent":true}}
+//
+//  POST   /api/v1/agents/bulk-patches/install
+//         Auth    : patches:execute
+//         Body    : {
+//                     "agent_ids":    ["...","..."],  // OU workspace_id — l'un des deux
+//                     "workspace_id": null,
+//                     "min_severity": "important",     // optionnel, défaut "optional" (= tous)
+//                     "reboot_after": false
+//                   }
+//         Resp 202: {"data":[{"agent_id":"...","command_id":"...","sent":true}, ...]}
+//         Note    : contrairement à bulk-commands, la sélection de patchs
+//                   n'est PAS partagée entre agents — chaque agent cible
+//                   reçoit ses propres patchs disponibles (>= min_severity),
+//                   les identifiants de patch étant spécifiques à
+//                   l'inventaire de chaque machine.
+//
+//  GET    /api/v1/patches/summary
+//         Auth    : patches:read
+//         Resp 200: {
+//                     "data": {
+//                       "agents_with_critical_pending": 3,
+//                       "agents_with_pending_patches":   12,
+//                       "total_pending_patches":         47
+//                     }
+//                   }
+//
+// ─────────────────────────────────────────────────────────────────────────────
 // MÉTRIQUES  [JWT requis — permission metrics:read]
 // ─────────────────────────────────────────────────────────────────────────────
 //
@@ -495,7 +534,14 @@ func NewRouter(deps *Dependencies) http.Handler {
 
 				r.Get("/{agentID}/inventory/hardware", RequirePermission("inventory", "read")(deps.InventoryHandler.Hardware))
 				r.Get("/{agentID}/inventory/software", RequirePermission("inventory", "read")(deps.InventoryHandler.Software))
+
+				r.Get("/{agentID}/patches", RequirePermission("patches", "read")(deps.PatchHandler.List))
+				r.Post("/{agentID}/patches/install", RequirePermission("patches", "execute")(deps.PatchHandler.Install))
+				r.Post("/bulk-patches/install", RequirePermission("patches", "execute")(deps.PatchHandler.BulkInstall))
 			})
+
+			// Patchs — vue d'ensemble tenant (dashboard)
+			r.Get("/patches/summary", RequirePermission("patches", "read")(deps.PatchHandler.Summary))
 
 			// Enrollment tokens
 			r.Route("/enrollment-tokens", func(r chi.Router) {

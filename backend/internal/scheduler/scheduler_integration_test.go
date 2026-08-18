@@ -47,7 +47,8 @@ func TestRunDueSchedules_OneTime_DisablesAfterFiring(t *testing.T) {
 
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	dispatcher := websocket.NewDispatcher(
-		postgres.NewAgentRepo(pool), postgres.NewMetricRepo(pool), postgres.NewInventoryRepo(pool), pool, log,
+		postgres.NewAgentRepo(pool), postgres.NewMetricRepo(pool), postgres.NewInventoryRepo(pool),
+		postgres.NewPatchRepo(pool), pool, log,
 	)
 	hub := websocket.NewHub(dispatcher, log)
 	dispatcher.SetHub(hub)

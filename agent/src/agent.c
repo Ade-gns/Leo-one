@@ -4,6 +4,8 @@
  * Threads lancés :
  *   _heartbeat_thread  : envoie LEO_MSG_HEARTBEAT toutes les N secondes
  *   _metrics_thread    : collecte et envoie LEO_MSG_METRICS toutes les N secondes
+ *   _patch_thread      : collecte et envoie LEO_MSG_PATCH_INVENTORY toutes les
+ *                        LEO_PATCH_CHECK_INTERVAL_SEC secondes
  *
  * Les commandes entrantes sont dispatchées dans _on_message()
  * appelé depuis le thread WSS (connection.c).
@@ -17,6 +19,7 @@
 #include "logger.h"
 #include "executor.h"
 #include "inventory.h"
+#include "patches.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -47,6 +50,7 @@ struct leo_agent {
     /* Threads */
     pthread_t             heartbeat_thread;
     pthread_t             metrics_thread;
+    pthread_t             patch_thread;
     volatile bool         threads_stop;
     volatile bool         force_heartbeat_pending;  /* Set by FORCE_HEARTBEAT msg */
     /* Protège threads_stop/force_heartbeat_pending pendant l'attente dans
@@ -83,8 +87,11 @@ typedef enum {
                                * fournis par le backend, exécutés tels quels. */
     _EXEC_KIND_INSTALL_PKG,  /* INSTALL_PKG : argv structuré (apt-get), construit
                                * par l'agent — jamais de shell, jamais d'injection. */
-    _EXEC_KIND_REBOOT        /* REBOOT : argv structuré (shutdown/systemctl),
+    _EXEC_KIND_REBOOT,       /* REBOOT : argv structuré (shutdown/systemctl),
                                * idem, jamais de shell. */
+    _EXEC_KIND_INSTALL_PATCHES /* INSTALL_PATCHES : délègue à
+                               * leo_patches_install() (platform/) — ids déjà
+                               * validés (voir _patch_id_valid), jamais de shell. */
 } _exec_kind_t;
 
 /* Contexte transmis à un thread d'exécution — alloué par les fonctions
@@ -107,6 +114,11 @@ typedef struct {
 
     /* _EXEC_KIND_REBOOT */
     int           reboot_delay_sec;
+
+    /* _EXEC_KIND_INSTALL_PATCHES */
+    char          patch_ids[LEO_PATCH_INSTALL_MAX_COUNT][LEO_PATCH_ID_MAX_LEN];
+    int           patch_count;
+    bool          reboot_after;
 } _exec_ctx_t;
 
 /* ─── Helpers ───────────────────────────────────────────────────────────── */
@@ -212,6 +224,59 @@ static void *_metrics_thread(void *arg) {
     }
 
     LOG_INFO("Thread métriques arrêté");
+    return NULL;
+}
+
+/* ─── Thread : Patchs disponibles ────────────────────────────────────────── */
+
+/**
+ * Interroge périodiquement le gestionnaire de paquets / Windows Update
+ * (leo_patches_collect, platform/) et envoie le résultat en
+ * LEO_MSG_PATCH_INVENTORY — même schéma que _metrics_thread, sur un
+ * intervalle bien plus long (LEO_PATCH_CHECK_INTERVAL_SEC) car la collecte
+ * est nettement plus coûteuse qu'un heartbeat (apt/dnf frappent le réseau,
+ * WUA peut prendre plusieurs secondes).
+ */
+static void *_patch_thread(void *arg) {
+    leo_agent_t *ag = (leo_agent_t *)arg;
+    char         buf[LEO_MAX_MSG_SIZE];
+
+    LOG_INFO("Thread patchs démarré (intervalle=%ds)", LEO_PATCH_CHECK_INTERVAL_SEC);
+
+    leo_patch_t *patches = calloc(LEO_INVENTORY_MAX_PATCHES, sizeof(leo_patch_t));
+    if (!patches) {
+        LOG_ERROR("Allocation échouée pour le thread patchs — thread arrêté");
+        return NULL;
+    }
+
+    while (!ag->threads_stop) {
+        _interruptible_sleep(ag, LEO_PATCH_CHECK_INTERVAL_SEC, /*wake_on_force=*/false);
+        if (ag->threads_stop) break;
+
+        if (!leo_conn_is_connected(ag->conn)) {
+            LOG_DEBUG("Vérification des patchs ignorée — pas connecté");
+            continue;
+        }
+
+        int n = leo_patches_collect(patches, LEO_INVENTORY_MAX_PATCHES);
+        if (n < 0) {
+            LOG_WARN("Échec de la collecte des patchs disponibles");
+            continue;
+        }
+
+        int len = leo_proto_build_patch_inventory(patches, n, buf, sizeof(buf));
+        if (len > 0) {
+            leo_error_t rc = leo_conn_send(ag->conn, buf, (size_t)len);
+            if (rc != LEO_OK) {
+                LOG_WARN("Échec envoi PATCH_INVENTORY (rc=%d)", rc);
+            } else {
+                LOG_DEBUG("PATCH_INVENTORY envoyé (%d patch(s))", n);
+            }
+        }
+    }
+
+    free(patches);
+    LOG_INFO("Thread patchs arrêté");
     return NULL;
 }
 
@@ -436,6 +501,28 @@ static void *_exec_thread(void *arg) {
         }
         break;
     }
+
+    case _EXEC_KIND_INSTALL_PATCHES: {
+        /* leo_patches_install() (platform/) résout ids[] en commande
+         * d'installation réelle — apt-get/dnf sur Linux, téléchargement +
+         * installation WUA sur Windows — et gère elle-même reboot_after. */
+        const char *ids[LEO_PATCH_INSTALL_MAX_COUNT];
+        for (int i = 0; i < ctx->patch_count; i++)
+            ids[i] = ctx->patch_ids[i];
+
+        leo_error_t rc = leo_patches_install(ids, ctx->patch_count, ctx->reboot_after,
+                                              ctx->timeout_secs, &result);
+        if (rc == LEO_OK) {
+            exit_code = result.exit_code;
+            stdout_s  = result.stdout_buf;
+            stderr_s  = result.stderr_buf;
+        } else if (rc == LEO_ERR_TIMEOUT) {
+            stderr_s = "Timeout pendant l'installation des patchs";
+        } else {
+            stderr_s = "Erreur système pendant l'installation des patchs";
+        }
+        break;
+    }
     }
 
     char buf[LEO_MAX_MSG_SIZE];
@@ -638,6 +725,100 @@ static void _dispatch_install_pkg(leo_agent_t *ag, const char *cmd_id, cJSON *bo
     }
 }
 
+/**
+ * Valide un identifiant de patch (leo_patch_t.id — nom de paquet Linux ou
+ * "KB1234567" Windows) avant de le transmettre à leo_patches_install() :
+ * même charset que _pkg_name_valid, qui couvre déjà les noms de paquets
+ * Debian/RPM qualifiés par architecture/version, et les identifiants KB
+ * (alphanumériques purs) y sont trivialement inclus.
+ */
+static bool _patch_id_valid(const char *id) {
+    size_t len = strlen(id);
+    if (len == 0 || len >= LEO_PATCH_ID_MAX_LEN)
+        return false;
+    for (size_t i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)id[i];
+        if (!isalnum(c) && c != '.' && c != '+' && c != '-' && c != '_' && c != ':')
+            return false;
+    }
+    return true;
+}
+
+/**
+ * Dispatch d'une commande INSTALL_PATCHES : { "patch_ids": ["KB123", ...],
+ * "reboot_after": true|false }. Les ids validés (voir _patch_id_valid) sont
+ * transmis tels quels à leo_patches_install() (_EXEC_KIND_INSTALL_PATCHES
+ * dans _exec_thread) — c'est l'implémentation platform/ qui les résout en
+ * commande d'installation réelle (apt-get/dnf, ou recherche WUA), jamais un
+ * shell ici.
+ */
+static void _dispatch_install_patches(leo_agent_t *ag, const char *cmd_id, cJSON *body) {
+    char names[LEO_PATCH_INSTALL_MAX_COUNT][LEO_PATCH_ID_MAX_LEN];
+    int  n = 0;
+    bool reboot_after = false;
+    int  timeout_secs = LEO_EXEC_DEFAULT_TIMEOUT_SEC;
+
+    if (body) {
+        cJSON *jids = cJSON_GetObjectItemCaseSensitive(body, "patch_ids");
+        cJSON *jrb  = cJSON_GetObjectItemCaseSensitive(body, "reboot_after");
+        cJSON *jt   = cJSON_GetObjectItemCaseSensitive(body, "timeout_sec");
+
+        if (cJSON_IsArray(jids)) {
+            cJSON *item;
+            cJSON_ArrayForEach(item, jids) {
+                if (n >= LEO_PATCH_INSTALL_MAX_COUNT) break;
+                if (cJSON_IsString(item)) {
+                    strncpy(names[n], item->valuestring, LEO_PATCH_ID_MAX_LEN - 1);
+                    names[n][LEO_PATCH_ID_MAX_LEN - 1] = '\0';
+                    n++;
+                }
+            }
+        }
+        if (cJSON_IsBool(jrb)) reboot_after = cJSON_IsTrue(jrb);
+        if (cJSON_IsNumber(jt) && jt->valuedouble > 0)
+            timeout_secs = _json_number_clamped(jt->valuedouble, 1, LEO_EXEC_MAX_TIMEOUT_SEC);
+    }
+
+    if (n == 0) {
+        LOG_WARN("INSTALL_PATCHES sans 'patch_ids' — ignoré (cmd_id=%s)", cmd_id);
+        _send_cmd_error(ag, cmd_id, "Requête invalide : 'patch_ids' requis");
+        return;
+    }
+
+    for (int i = 0; i < n; i++) {
+        if (!_patch_id_valid(names[i])) {
+            LOG_WARN("INSTALL_PATCHES : identifiant de patch invalide, commande rejetée (cmd_id=%s)", cmd_id);
+            _send_cmd_error(ag, cmd_id, "Requête invalide : identifiant de patch non autorisé");
+            return;
+        }
+    }
+
+    timeout_secs = _clamp_timeout(timeout_secs);
+    if (!_reserve_exec_slot(ag, cmd_id))
+        return;
+
+    _exec_ctx_t *ctx = calloc(1, sizeof(*ctx));
+    if (!ctx) {
+        LOG_ERROR("Allocation échouée pour la commande (cmd_id=%s)", cmd_id);
+        _release_exec_slot(ag);
+        _send_cmd_error(ag, cmd_id, "Erreur interne de l'agent (allocation)");
+        return;
+    }
+    ctx->ag   = ag;
+    ctx->kind = _EXEC_KIND_INSTALL_PATCHES;
+    strncpy(ctx->cmd_id, cmd_id, sizeof(ctx->cmd_id) - 1);
+    ctx->timeout_secs  = timeout_secs;
+    ctx->patch_count   = n;
+    ctx->reboot_after  = reboot_after;
+    for (int i = 0; i < n; i++)
+        strncpy(ctx->patch_ids[i], names[i], LEO_PATCH_ID_MAX_LEN - 1);
+
+    if (_spawn_detached(ag, cmd_id, _exec_thread, ctx, _free_exec_ctx)) {
+        LOG_INFO("INSTALL_PATCHES lancé (cmd_id=%s, %d patch(s), reboot_after=%s, timeout=%ds)",
+                 cmd_id, n, reboot_after ? "true" : "false", timeout_secs);
+    }
+}
+
 /** Délai par défaut avant redémarrage, en secondes — laisse le temps à
  * l'utilisateur de la machine de sauvegarder son travail. */
 #define LEO_REBOOT_DEFAULT_DELAY_SEC  60
@@ -828,6 +1009,11 @@ static void _on_message(const char *json_str, size_t len, void *userdata) {
         _dispatch_collect_inventory(ag, msg.id);
         break;
 
+    case LEO_MSG_INSTALL_PATCHES:
+        LOG_WARN("Commande INSTALL_PATCHES reçue (cmd_id=%s)", msg.id);
+        _dispatch_install_patches(ag, msg.id, msg.body);
+        break;
+
     case LEO_MSG_FORCE_HEARTBEAT:
         LOG_INFO("Force heartbeat reçue du serveur");
         pthread_mutex_lock(&ag->wake_mutex);
@@ -951,6 +1137,24 @@ leo_agent_t *leo_agent_start(const char *config_path) {
         return NULL;
     }
 
+    if (pthread_create(&ag->patch_thread, NULL, _patch_thread, ag) != 0) {
+        LOG_FATAL("Impossible de créer le thread patchs");
+        pthread_mutex_lock(&ag->wake_mutex);
+        ag->threads_stop = true;
+        pthread_cond_broadcast(&ag->wake_cond);
+        pthread_mutex_unlock(&ag->wake_mutex);
+        pthread_join(ag->heartbeat_thread, NULL);
+        pthread_join(ag->metrics_thread,   NULL);
+        leo_metrics_destroy();
+        pthread_cond_destroy(&ag->wake_cond);
+        pthread_mutex_destroy(&ag->wake_mutex);
+        pthread_cond_destroy(&ag->exec_cond);
+        pthread_mutex_destroy(&ag->exec_mutex);
+        /* Voir commentaire ci-dessus. */
+        if (leo_conn_destroy(ag->conn)) free(ag);
+        return NULL;
+    }
+
     LOG_INFO("Agent Leo-One v%s démarré — agent_id=%s",
              LEO_AGENT_VERSION, ag->config.agent_id);
     return ag;
@@ -972,6 +1176,7 @@ void leo_agent_stop(leo_agent_t *ag) {
 
     pthread_join(ag->heartbeat_thread, NULL);
     pthread_join(ag->metrics_thread,   NULL);
+    pthread_join(ag->patch_thread,     NULL);
 
     /* Attendre les scripts encore en cours d'exécution : leurs threads sont
      * détachés et utilisent ag->conn (et ag lui-même) pour envoyer leur

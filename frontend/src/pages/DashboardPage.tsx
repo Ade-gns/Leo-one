@@ -1,8 +1,9 @@
 /**
  * DashboardPage.tsx — Tableau de bord principal MSP
  */
-import { Monitor, AlertTriangle, CheckCircle, WifiOff } from 'lucide-react'
+import { Monitor, AlertTriangle, CheckCircle, WifiOff, ShieldAlert } from 'lucide-react'
 import { useAgents } from '@/hooks/useAgents'
+import { usePatchesSummary } from '@/hooks/usePatches'
 import { StatCard }         from '@/components/dashboard/StatCard'
 import { AgentStatusChart } from '@/components/dashboard/AgentStatusChart'
 import { RecentAlerts }     from '@/components/dashboard/RecentAlerts'
@@ -15,6 +16,8 @@ function countByStatus(agents: { status: AgentStatus }[], status: AgentStatus) {
 export default function DashboardPage() {
   const { data, isLoading } = useAgents()
   const agents = data?.data ?? []
+  const { data: patchSummaryResp, isLoading: patchSummaryLoading } = usePatchesSummary()
+  const patchSummary = patchSummaryResp?.data
 
   return (
     <div className="flex flex-col gap-6 p-6">
@@ -24,7 +27,7 @@ export default function DashboardPage() {
       </div>
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
         <StatCard
           label="Machines totales"
           value={isLoading ? '…' : agents.length}
@@ -56,6 +59,17 @@ export default function DashboardPage() {
           icon={AlertTriangle}
           iconColor="text-red-500"
           loading={isLoading}
+        />
+        <StatCard
+          label="Patchs critiques en attente"
+          value={patchSummaryLoading ? '…' : (patchSummary?.agents_with_critical_pending ?? 0)}
+          icon={ShieldAlert}
+          iconColor="text-red-500"
+          loading={patchSummaryLoading}
+          trend={!patchSummaryLoading && patchSummary ? {
+            direction: patchSummary.agents_with_critical_pending > 0 ? 'down' : 'neutral',
+            value: `${patchSummary.total_pending_patches} patch(s) en attente au total`,
+          } : undefined}
         />
       </div>
 

@@ -2,15 +2,17 @@
  * AgentDetailPanel.tsx — Panneau d'info détaillée d'un agent (hardware, logiciels, certificat)
  */
 import { useState } from 'react'
-import { Cpu, HardDrive, Package, FileText } from 'lucide-react'
+import { Cpu, HardDrive, Package, FileText, ShieldAlert, Loader2, Download } from 'lucide-react'
 import { formatDistanceToNow } from 'date-fns'
 import { fr } from 'date-fns/locale'
 import { useHardwareInventory, useSoftwareInventory } from '@/hooks/useAgents'
+import { usePatches, useInstallPatches } from '@/hooks/usePatches'
+import { PatchSeverityBadge } from '@/components/agents/PatchSeverityBadge'
 import { formatBytes } from '@/lib/utils'
 import { cn } from '@/lib/utils'
 import type { Agent } from '@/types/agent'
 
-type Tab = 'hardware' | 'software' | 'info'
+type Tab = 'hardware' | 'software' | 'patches' | 'info'
 
 interface AgentDetailPanelProps {
   agent: Agent
@@ -27,16 +29,38 @@ function InfoRow({ label, value }: { label: string; value: React.ReactNode }) {
 
 export function AgentDetailPanel({ agent }: AgentDetailPanelProps) {
   const [tab, setTab] = useState<Tab>('hardware')
+  const [selectedPatches, setSelectedPatches] = useState<Set<string>>(new Set())
 
   const { data: hwResp, isLoading: hwLoading } = useHardwareInventory(agent.id)
   const { data: swResp, isLoading: swLoading } = useSoftwareInventory(agent.id, { enabled: tab === 'software' })
+  const { data: patchResp, isLoading: patchLoading } = usePatches(agent.id)
+  const installPatches = useInstallPatches(agent.id)
 
   const hw = hwResp?.data
   const sw = swResp?.data ?? []
+  const patches = (patchResp?.data ?? []).filter(p => p.status === 'available')
+
+  const togglePatch = (id: string) => {
+    setSelectedPatches(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const handleInstallSelection = () => {
+    if (selectedPatches.size === 0) return
+    installPatches.mutate(
+      { patch_ids: Array.from(selectedPatches) },
+      { onSuccess: () => setSelectedPatches(new Set()) },
+    )
+  }
 
   const tabs: { key: Tab; label: string; icon: React.ElementType }[] = [
     { key: 'hardware', label: 'Matériel',  icon: HardDrive },
     { key: 'software', label: 'Logiciels', icon: Package },
+    { key: 'patches',  label: 'Patchs',    icon: ShieldAlert },
     { key: 'info',     label: 'Infos',     icon: FileText },
   ]
 
@@ -123,6 +147,59 @@ export function AgentDetailPanel({ agent }: AgentDetailPanelProps) {
                 </table>
               </div>
             )
+        )}
+
+        {/* Patchs */}
+        {tab === 'patches' && (
+          <div className="flex flex-col gap-3">
+            {patchLoading ? (
+              <div className="space-y-2">{Array.from({ length: 4 }).map((_, i) => <div key={i} className="h-8 animate-pulse rounded bg-gray-100" />)}</div>
+            ) : patches.length === 0 ? (
+              <p className="text-sm text-gray-400">Aucun patch en attente</p>
+            ) : (
+              <>
+                <div className="max-h-72 overflow-auto rounded-lg border border-gray-100">
+                  {patches.map(p => (
+                    <label
+                      key={p.id}
+                      className="flex cursor-pointer items-start gap-2 border-b border-gray-50 px-3 py-2 text-xs last:border-b-0 hover:bg-gray-50"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedPatches.has(p.native_id)}
+                        onChange={() => togglePatch(p.native_id)}
+                        className="mt-0.5 h-3.5 w-3.5 rounded border-gray-300 text-brand-600 focus:ring-brand-500"
+                      />
+                      <div className="flex-1 min-w-0">
+                        <p className="truncate font-medium text-gray-800">{p.title}</p>
+                        {p.size_bytes ? (
+                          <p className="text-gray-400">{formatBytes(p.size_bytes)}</p>
+                        ) : null}
+                      </div>
+                      <PatchSeverityBadge severity={p.severity} />
+                    </label>
+                  ))}
+                </div>
+
+                {installPatches.isError && (
+                  <p className="text-xs text-red-500">
+                    Erreur : {installPatches.error instanceof Error ? installPatches.error.message : 'Erreur inconnue'}
+                  </p>
+                )}
+
+                <button
+                  onClick={handleInstallSelection}
+                  disabled={selectedPatches.size === 0 || installPatches.isPending}
+                  className="flex items-center justify-center gap-2 rounded-lg bg-brand-900 px-4 py-2 text-xs font-semibold text-white hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {installPatches.isPending
+                    ? <><Loader2 className="h-3.5 w-3.5 animate-spin" />Installation…</>
+                    : <><Download className="h-3.5 w-3.5" />Installer la sélection ({selectedPatches.size})</>
+                  }
+                </button>
+              </>
+            )}
+          </div>
         )}
 
         {/* Infos agent */}

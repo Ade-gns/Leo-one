@@ -126,9 +126,10 @@ func main() {
 	userRepo := postgres.NewUserRepo(pool)
 	workspaceRepo := postgres.NewWorkspaceRepo(pool)
 	auditRepo := postgres.NewAuditRepo(pool)
+	patchRepo := postgres.NewPatchRepo(pool)
 
 	// WebSocket
-	dispatcher := websocket.NewDispatcher(agentRepo, metricRepo, inventoryRepo, pool, log)
+	dispatcher := websocket.NewDispatcher(agentRepo, metricRepo, inventoryRepo, patchRepo, pool, log)
 	hub := websocket.NewHub(dispatcher, log)
 	dispatcher.SetHub(hub)
 
@@ -157,6 +158,7 @@ func main() {
 	scriptHandler := handlers.NewScriptHandler(pool, auditLogger)
 	scheduleHandler := handlers.NewScheduleHandler(pool, auditLogger)
 	auditHandler := handlers.NewAuditHandler(auditRepo)
+	patchHandler := handlers.NewPatchHandler(patchRepo, agentRepo, agentHandler, pool, auditLogger)
 
 	// Routeur API REST (Chi)
 	deps := &chiRouter.Dependencies{
@@ -174,6 +176,7 @@ func main() {
 		ScriptHandler:     scriptHandler,
 		ScheduleHandler:   scheduleHandler,
 		AuditHandler:      auditHandler,
+		PatchHandler:      patchHandler,
 		JWTVerifier:       jwtVerifier,
 		TenantRepo:        tenantRepo,
 		AuditLogger:       auditLogger,

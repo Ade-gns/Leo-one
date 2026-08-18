@@ -19,6 +19,10 @@
 
 #define LEO_HEARTBEAT_INTERVAL_SEC  10800   /* 3 hours for low resource consumption */
 #define LEO_METRICS_INTERVAL_SEC    300     /* 5 minutes for low resource consumption */
+#define LEO_PATCH_CHECK_INTERVAL_SEC 21600  /* 6 hours : interroger le gestionnaire de
+                                              * paquets / Windows Update est plus coûteux
+                                              * qu'un heartbeat, pas besoin d'une fraîcheur
+                                              * à la minute près pour des correctifs */
 #define LEO_RECONNECT_INIT_MS     5000
 #define LEO_RECONNECT_STEP_MS     5000
 #define LEO_RECONNECT_MAX_MS     60000
@@ -58,6 +62,7 @@ typedef enum {
     LEO_MSG_CMD_RESULT         =   5,
     LEO_MSG_LOG                =   6,
     LEO_MSG_PONG               =   7,
+    LEO_MSG_PATCH_INVENTORY    =   8,   /* agent→backend : liste des patchs disponibles */
     /* Entrants : backend → agent */
     LEO_MSG_HELLO_ACK          = 100,
     LEO_MSG_EXEC_SCRIPT        = 101,
@@ -67,6 +72,7 @@ typedef enum {
     LEO_MSG_PING               = 105,
     LEO_MSG_CONFIG_UPDATE      = 106,
     LEO_MSG_FORCE_HEARTBEAT    = 107,   /* backend→agent : force immediate heartbeat */
+    LEO_MSG_INSTALL_PATCHES    = 108,   /* backend→agent : installer une sélection de patchs */
     /* Sentinel */
     LEO_MSG_UNKNOWN            =  -1
 } leo_msg_type_t;
@@ -139,6 +145,41 @@ typedef struct {
     char publisher[128];
     char install_path[256];
 } leo_sw_item_t;
+
+/* ─────────────────────────────────────────────────────────────────────────
+ * Patchs / mises à jour système (LEO_MSG_PATCH_INVENTORY, LEO_MSG_INSTALL_PATCHES)
+ * ───────────────────────────────────────────────────────────────────────── */
+
+/** Nombre max de patchs remontés par collecte — même raisonnement que
+ *  LEO_INVENTORY_MAX_SW_ITEMS pour la taille du message WS. */
+#define LEO_INVENTORY_MAX_PATCHES  200
+#define LEO_PATCH_ID_MAX_LEN       160  /* nom+version de paquet (Linux) ou "KB1234567" (Windows) */
+#define LEO_PATCH_TITLE_MAX_LEN    256
+
+/** Borne le nombre de patchs installables en une seule commande
+ *  LEO_MSG_INSTALL_PATCHES — dimensionne aussi les buffers argv des
+ *  implémentations platform/ (voir patches_linux.c, patches_win.c). Même
+ *  ordre de grandeur que LEO_PKG_MAX_COUNT (agent.c, INSTALL_PKG). */
+#define LEO_PATCH_INSTALL_MAX_COUNT  64
+
+/* Ordre croissant volontaire (optional < important < critical) : permet des
+ * comparaisons numériques directes côté serveur/UI (ex: "au moins important"). */
+typedef enum {
+    LEO_PATCH_SEVERITY_OPTIONAL  = 0,
+    LEO_PATCH_SEVERITY_IMPORTANT = 1,
+    LEO_PATCH_SEVERITY_CRITICAL  = 2
+} leo_patch_severity_t;
+
+typedef struct {
+    /* Identifiant stable côté OS : nom de paquet Debian/RPM (Linux) ou
+     * identifiant KB (Windows) — utilisé tel quel par le backend comme
+     * native_id, et renvoyé par LEO_MSG_INSTALL_PATCHES pour désigner les
+     * patchs à installer (voir leo_patches_install). */
+    char                  id[LEO_PATCH_ID_MAX_LEN];
+    char                  title[LEO_PATCH_TITLE_MAX_LEN];
+    leo_patch_severity_t  severity;
+    uint64_t              size_bytes;  /* 0 si indéterminable (best-effort) */
+} leo_patch_t;
 
 /* ─────────────────────────────────────────────────────────────────────────
  * État interne de l'agent (machine d'état)

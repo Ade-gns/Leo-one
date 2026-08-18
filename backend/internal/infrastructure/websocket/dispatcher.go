@@ -11,6 +11,7 @@ import (
 	agentDomain "github.com/yourorg/leo-one/internal/domain/agent"
 	inventoryDomain "github.com/yourorg/leo-one/internal/domain/inventory"
 	metricDomain "github.com/yourorg/leo-one/internal/domain/metric"
+	patchDomain "github.com/yourorg/leo-one/internal/domain/patch"
 )
 
 // Enveloppe du protocole WSS (doit correspondre au format de l'agent C).
@@ -24,12 +25,13 @@ type envelope struct {
 
 // Types de messages entrants (doivent correspondre aux constantes de leo_agent.h).
 const (
-	msgTypeHello     = 1
-	msgTypeHeartbeat = 2
-	msgTypeMetrics   = 3
-	msgTypeInventory = 4
-	msgTypeCmdResult = 5
-	msgTypePong      = 7
+	msgTypeHello          = 1
+	msgTypeHeartbeat      = 2
+	msgTypeMetrics        = 3
+	msgTypeInventory      = 4
+	msgTypeCmdResult      = 5
+	msgTypePong           = 7
+	msgTypePatchInventory = 8
 )
 
 // Intervalles envoyés dans HELLO_ACK (doivent correspondre aux défauts de
@@ -99,11 +101,25 @@ type softwareBody struct {
 	InstallPath string `json:"install_path"`
 }
 
+// patchInventoryBody est le body du message PATCH_INVENTORY — voir
+// agent/src/protocol.c leo_proto_build_patch_inventory() côté agent.
+type patchInventoryBody struct {
+	Patches []patchItemBody `json:"patches"`
+}
+
+type patchItemBody struct {
+	ID        string `json:"id"`
+	Title     string `json:"title"`
+	Severity  string `json:"severity"`
+	SizeBytes uint64 `json:"size_bytes"`
+}
+
 // Dispatcher route les messages entrants des agents vers les use cases appropriés.
 type Dispatcher struct {
 	agentRepo     agentDomain.Repository
 	metricRepo    metricDomain.Repository
 	inventoryRepo inventoryDomain.Repository
+	patchRepo     patchDomain.Repository
 	pool          *pgxpool.Pool // accès direct pour la table commands (pas de repo dédié)
 	hub           *Hub          // référence arrière pour envoyer HELLO_ACK, etc.
 	logger        *slog.Logger
@@ -114,6 +130,7 @@ func NewDispatcher(
 	agentRepo agentDomain.Repository,
 	metricRepo metricDomain.Repository,
 	inventoryRepo inventoryDomain.Repository,
+	patchRepo patchDomain.Repository,
 	pool *pgxpool.Pool,
 	logger *slog.Logger,
 ) *Dispatcher {
@@ -121,6 +138,7 @@ func NewDispatcher(
 		agentRepo:     agentRepo,
 		metricRepo:    metricRepo,
 		inventoryRepo: inventoryRepo,
+		patchRepo:     patchRepo,
 		pool:          pool,
 		logger:        logger,
 	}
@@ -168,6 +186,8 @@ func (d *Dispatcher) Dispatch(client *Client, raw []byte) {
 		d.handleCmdResult(client, env, log)
 	case msgTypeInventory:
 		d.handleInventory(client, env, log)
+	case msgTypePatchInventory:
+		d.handlePatchInventory(client, env, log)
 	case msgTypePong:
 		log.Debug("PONG reçu")
 	default:
@@ -227,6 +247,7 @@ var pendingCommandWSType = map[string]int{
 	"reboot":            103, // LEO_MSG_REBOOT
 	"collect_inventory": 104, // LEO_MSG_COLLECT_INVENTORY
 	"ping":              105, // LEO_MSG_PING
+	"install_patches":   108, // LEO_MSG_INSTALL_PATCHES
 }
 
 // redeliverPendingCommands renvoie à l'agent, à sa (re)connexion, les
@@ -369,14 +390,36 @@ func (d *Dispatcher) handleCmdResult(client *Client, env envelope, log *slog.Log
 		status = "failed"
 	}
 
-	_, err := d.pool.Exec(context.Background(), `
+	ctx := context.Background()
+	var cmdType string
+	var payload json.RawMessage
+	err := d.pool.QueryRow(ctx, `
 		UPDATE commands
 		SET status = $1::command_status, exit_code = $2, stdout = $3, stderr = $4,
 		    completed_at = NOW()
 		WHERE id = $5 AND tenant_id = $6
-	`, status, body.ExitCode, body.Stdout, body.Stderr, body.CommandID, client.TenantID)
+		RETURNING type::text, payload
+	`, status, body.ExitCode, body.Stdout, body.Stderr, body.CommandID, client.TenantID).Scan(&cmdType, &payload)
 	if err != nil {
 		log.Error("Échec mise à jour du statut de la commande", "error", err)
+		return
+	}
+
+	// Une commande install_patches réussie/échouée fait transitionner les
+	// patchs ciblés vers installed/failed sans attendre la prochaine collecte
+	// périodique (voir handlePatchInventory) — patch_ids vient du payload
+	// stocké à la création de la commande (voir PatchHandler.Install/BulkInstall).
+	if cmdType == "install_patches" {
+		var p struct {
+			PatchIDs []string `json:"patch_ids"`
+		}
+		if err := json.Unmarshal(payload, &p); err != nil {
+			log.Error("Impossible de décoder le payload install_patches", "error", err)
+			return
+		}
+		if err := d.patchRepo.MarkInstallResult(ctx, client.TenantID, client.AgentID, p.PatchIDs, body.ExitCode == 0); err != nil {
+			log.Error("Échec mise à jour du statut des patchs", "error", err)
+		}
 	}
 }
 
@@ -422,4 +465,51 @@ func (d *Dispatcher) handleInventory(client *Client, env envelope, log *slog.Log
 	}
 
 	log.Info("Inventaire ingéré", "cpu_model", body.Hardware.CPUModel, "software_count", len(items))
+}
+
+// handlePatchInventory persiste la liste des patchs disponibles remontée
+// périodiquement par l'agent (voir agent/src/agent.c _patch_thread). Upsert
+// uniquement : un patch qui n'est plus rapporté n'est jamais supprimé ou
+// changé de statut ici (voir patch.Repository.Upsert et le commentaire sur
+// migrations/006_patches.sql) — seul un CMD_RESULT d'install_patches (voir
+// handleCmdResult) fait transitionner un patch vers installed/failed.
+func (d *Dispatcher) handlePatchInventory(client *Client, env envelope, log *slog.Logger) {
+	var body patchInventoryBody
+	if err := json.Unmarshal(env.Body, &body); err != nil {
+		log.Error("Impossible de décoder PATCH_INVENTORY body", "error", err)
+		return
+	}
+
+	reports := make([]patchDomain.Report, 0, len(body.Patches))
+	for _, p := range body.Patches {
+		if p.ID == "" {
+			continue
+		}
+		reports = append(reports, patchDomain.Report{
+			NativeID:  p.ID,
+			Title:     p.Title,
+			Severity:  normalizePatchSeverity(p.Severity),
+			SizeBytes: p.SizeBytes,
+		})
+	}
+
+	if err := d.patchRepo.Upsert(context.Background(), client.TenantID, client.AgentID, reports); err != nil {
+		log.Error("Échec enregistrement de l'inventaire des patchs", "error", err)
+		return
+	}
+
+	log.Info("Inventaire des patchs ingéré", "count", len(reports))
+}
+
+// normalizePatchSeverity ramène toute valeur inattendue à "important" —
+// l'ENUM Postgres patch_severity rejetterait une valeur hors énumération
+// (INSERT en échec), ce qui ferait échouer tout le batch Upsert pour un
+// simple champ malformé d'une seule entrée envoyée par un agent bogué/futur.
+func normalizePatchSeverity(s string) patchDomain.Severity {
+	switch patchDomain.Severity(s) {
+	case patchDomain.SeverityOptional, patchDomain.SeverityImportant, patchDomain.SeverityCritical:
+		return patchDomain.Severity(s)
+	default:
+		return patchDomain.SeverityImportant
+	}
 }

@@ -197,6 +197,37 @@ int leo_proto_build_inventory(const leo_hw_inventory_t *hw,
     return _serialize(LEO_MSG_INVENTORY, body, buf, bufsz);
 }
 
+/** Chaîne attendue côté backend pour chaque valeur de leo_patch_severity_t
+ *  (voir PatchHandler / migration patches côté backend — colonne severity). */
+static const char *_patch_severity_str(leo_patch_severity_t s) {
+    switch (s) {
+    case LEO_PATCH_SEVERITY_CRITICAL:  return "critical";
+    case LEO_PATCH_SEVERITY_IMPORTANT: return "important";
+    default:                            return "optional";
+    }
+}
+
+int leo_proto_build_patch_inventory(const leo_patch_t *patches, int count,
+                                     char *buf, size_t bufsz) {
+    cJSON *body = cJSON_CreateObject();
+    if (!body) return -1;
+
+    cJSON *jpatches = cJSON_CreateArray();
+    if (!jpatches) { cJSON_Delete(body); return -1; }
+    for (int i = 0; i < count && patches; i++) {
+        cJSON *item = cJSON_CreateObject();
+        if (!item) continue;
+        cJSON_AddStringToObject(item, "id",         patches[i].id);
+        cJSON_AddStringToObject(item, "title",      patches[i].title);
+        cJSON_AddStringToObject(item, "severity",   _patch_severity_str(patches[i].severity));
+        cJSON_AddNumberToObject(item, "size_bytes", (double)patches[i].size_bytes);
+        cJSON_AddItemToArray(jpatches, item);
+    }
+    cJSON_AddItemToObject(body, "patches", jpatches);
+
+    return _serialize(LEO_MSG_PATCH_INVENTORY, body, buf, bufsz);
+}
+
 /* ─── Désérialisation ───────────────────────────────────────────────────── */
 
 leo_error_t leo_proto_parse(const char *json_str, leo_incoming_msg_t *out) {

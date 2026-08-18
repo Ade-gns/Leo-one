@@ -62,6 +62,15 @@ int leo_proto_build_inventory(const leo_hw_inventory_t *hw,
                               const leo_sw_item_t *sw, int sw_count,
                               char *buf, size_t bufsz);
 
+/**
+ * Construit un message PATCH_INVENTORY à partir de la liste des mises à
+ * jour disponibles (voir leo_patches_collect).
+ * @param patches  Tableau des patchs (peut être NULL si count == 0)
+ * @param count    Nombre d'entrées valides dans patches
+ */
+int leo_proto_build_patch_inventory(const leo_patch_t *patches, int count,
+                                     char *buf, size_t bufsz);
+
 /* ─── Désérialisation (backend → agent) ──────────────────────────────────── */
 
 /**

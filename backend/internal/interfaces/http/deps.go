@@ -28,6 +28,7 @@ type Dependencies struct {
 	ScriptHandler     *handlers.ScriptHandler
 	ScheduleHandler   *handlers.ScheduleHandler
 	AuditHandler      *handlers.AuditHandler
+	PatchHandler      *handlers.PatchHandler
 
 	// Infrastructure
 	JWTVerifier     *pkgauth.JWTVerifier

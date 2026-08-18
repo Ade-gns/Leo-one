@@ -393,6 +393,7 @@ var commandWSType = map[string]int{
 	"reboot":            103, // LEO_MSG_REBOOT
 	"collect_inventory": 104, // LEO_MSG_COLLECT_INVENTORY
 	"ping":              105, // LEO_MSG_PING
+	"install_patches":   108, // LEO_MSG_INSTALL_PATCHES
 }
 
 // CreateAndDispatchCommand insère une commande en BDD et l'envoie

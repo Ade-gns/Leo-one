@@ -36,6 +36,7 @@ if(TARGET_OS STREQUAL "linux" OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
         platform/linux/executor_linux.c
         platform/linux/crypto_linux.c
         platform/linux/inventory_linux.c
+        platform/linux/patches_linux.c
     )
     add_definitions(-DLEO_PLATFORM_LINUX)
 
@@ -46,6 +47,7 @@ elseif(TARGET_OS STREQUAL "windows" OR CMAKE_SYSTEM_NAME STREQUAL "Windows")
         platform/windows/executor_win.c
         platform/windows/crypto_win.c
         platform/windows/inventory_win.c
+        platform/windows/patches_win.c
     )
     add_definitions(-DLEO_PLATFORM_WINDOWS)
     # Cible Windows 7+ (0x0601) : nécessaire pour que <iphlpapi.h> déclare
@@ -158,9 +160,13 @@ target_link_libraries(leo-agent PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 
 # Bibliothèques d'import Windows : ws2_32 (Winsock, requis par libwebsockets
 # et GetComputerNameA), crypt32/bcrypt (dépendances d'OpenSSL sur Windows),
-# advapi32 (Service Control Manager + registre), iphlpapi (GetIfTable2).
+# advapi32 (Service Control Manager + registre + privilège SE_SHUTDOWN_NAME,
+# voir patches_win.c), iphlpapi (GetIfTable2), ole32/oleaut32 (API COM
+# Windows Update Agent — CoCreateInstance/BSTR/DECIMAL, voir patches_win.c ;
+# les GUID CLSID_UpdateSession & co. sont définis dans patches_win.c lui-même
+# via INITGUID, pas besoin d'une bibliothèque d'import wuapi dédiée).
 if(WIN32)
-    target_link_libraries(leo-agent PRIVATE ws2_32 crypt32 bcrypt advapi32 iphlpapi)
+    target_link_libraries(leo-agent PRIVATE ws2_32 crypt32 bcrypt advapi32 iphlpapi ole32 oleaut32)
 endif()
 
 # ─── Informations de version compilées dans le binaire ───────────────────────

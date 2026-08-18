@@ -46,6 +46,7 @@ func newTestHub(pool *pgxpool.Pool) *leoWS.Hub {
 		postgres.NewAgentRepo(pool),
 		postgres.NewMetricRepo(pool),
 		postgres.NewInventoryRepo(pool),
+		postgres.NewPatchRepo(pool),
 		pool, log,
 	)
 	hub := leoWS.NewHub(dispatcher, log)
