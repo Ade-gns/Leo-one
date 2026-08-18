@@ -10,14 +10,14 @@ import (
 type Type string
 
 const (
-	TypeCPUPercent      Type = "cpu_percent"
-	TypeRAMUsedBytes    Type = "ram_used_bytes"
-	TypeRAMTotalBytes   Type = "ram_total_bytes"
-	TypeDiskUsedBytes   Type = "disk_used_bytes"
-	TypeDiskTotalBytes  Type = "disk_total_bytes"
-	TypeNetBytesIn      Type = "net_bytes_in"
-	TypeNetBytesOut     Type = "net_bytes_out"
-	TypeProcessCount    Type = "process_count"
+	TypeCPUPercent     Type = "cpu_percent"
+	TypeRAMUsedBytes   Type = "ram_used_bytes"
+	TypeRAMTotalBytes  Type = "ram_total_bytes"
+	TypeDiskUsedBytes  Type = "disk_used_bytes"
+	TypeDiskTotalBytes Type = "disk_total_bytes"
+	TypeNetBytesIn     Type = "net_bytes_in"
+	TypeNetBytesOut    Type = "net_bytes_out"
+	TypeProcessCount   Type = "process_count"
 )
 
 // Point est un point de mesure unique dans la série temporelle.
@@ -33,19 +33,19 @@ type Point struct {
 // Snapshot regroupe toutes les métriques d'un agent à un instant T.
 // C'est le format reçu depuis l'agent via WebSocket.
 type Snapshot struct {
-	AgentID          string            `json:"agent_id"`
-	TenantID         string            `json:"tenant_id"`
-	Timestamp        time.Time         `json:"timestamp"`
-	CPUPercent       float64           `json:"cpu_percent"`
-	CPUPerCore       []float64         `json:"cpu_per_core,omitempty"`
-	RAMTotalBytes    uint64            `json:"ram_total_bytes"`
-	RAMUsedBytes     uint64            `json:"ram_used_bytes"`
-	RAMAvailableBytes uint64           `json:"ram_available_bytes"`
-	DiskTotalBytes   uint64            `json:"disk_total_bytes"`
-	DiskUsedBytes    uint64            `json:"disk_used_bytes"`
-	NetBytesIn       uint64            `json:"net_bytes_in"`
-	NetBytesOut      uint64            `json:"net_bytes_out"`
-	ProcessCount     uint32            `json:"process_count"`
+	AgentID           string    `json:"agent_id"`
+	TenantID          string    `json:"tenant_id"`
+	Timestamp         time.Time `json:"timestamp"`
+	CPUPercent        float64   `json:"cpu_percent"`
+	CPUPerCore        []float64 `json:"cpu_per_core,omitempty"`
+	RAMTotalBytes     uint64    `json:"ram_total_bytes"`
+	RAMUsedBytes      uint64    `json:"ram_used_bytes"`
+	RAMAvailableBytes uint64    `json:"ram_available_bytes"`
+	DiskTotalBytes    uint64    `json:"disk_total_bytes"`
+	DiskUsedBytes     uint64    `json:"disk_used_bytes"`
+	NetBytesIn        uint64    `json:"net_bytes_in"`
+	NetBytesOut       uint64    `json:"net_bytes_out"`
+	ProcessCount      uint32    `json:"process_count"`
 }
 
 // ToPoints convertit un Snapshot en slice de Points individuels
@@ -57,14 +57,14 @@ func (s *Snapshot) ToPoints() []Point {
 	}
 
 	return []Point{
-		{Time: ts, AgentID: s.AgentID, TenantID: s.TenantID, Type: TypeCPUPercent,     Value: s.CPUPercent},
-		{Time: ts, AgentID: s.AgentID, TenantID: s.TenantID, Type: TypeRAMUsedBytes,   Value: float64(s.RAMUsedBytes)},
-		{Time: ts, AgentID: s.AgentID, TenantID: s.TenantID, Type: TypeRAMTotalBytes,  Value: float64(s.RAMTotalBytes)},
-		{Time: ts, AgentID: s.AgentID, TenantID: s.TenantID, Type: TypeDiskUsedBytes,  Value: float64(s.DiskUsedBytes)},
+		{Time: ts, AgentID: s.AgentID, TenantID: s.TenantID, Type: TypeCPUPercent, Value: s.CPUPercent},
+		{Time: ts, AgentID: s.AgentID, TenantID: s.TenantID, Type: TypeRAMUsedBytes, Value: float64(s.RAMUsedBytes)},
+		{Time: ts, AgentID: s.AgentID, TenantID: s.TenantID, Type: TypeRAMTotalBytes, Value: float64(s.RAMTotalBytes)},
+		{Time: ts, AgentID: s.AgentID, TenantID: s.TenantID, Type: TypeDiskUsedBytes, Value: float64(s.DiskUsedBytes)},
 		{Time: ts, AgentID: s.AgentID, TenantID: s.TenantID, Type: TypeDiskTotalBytes, Value: float64(s.DiskTotalBytes)},
-		{Time: ts, AgentID: s.AgentID, TenantID: s.TenantID, Type: TypeNetBytesIn,     Value: float64(s.NetBytesIn)},
-		{Time: ts, AgentID: s.AgentID, TenantID: s.TenantID, Type: TypeNetBytesOut,    Value: float64(s.NetBytesOut)},
-		{Time: ts, AgentID: s.AgentID, TenantID: s.TenantID, Type: TypeProcessCount,   Value: float64(s.ProcessCount)},
+		{Time: ts, AgentID: s.AgentID, TenantID: s.TenantID, Type: TypeNetBytesIn, Value: float64(s.NetBytesIn)},
+		{Time: ts, AgentID: s.AgentID, TenantID: s.TenantID, Type: TypeNetBytesOut, Value: float64(s.NetBytesOut)},
+		{Time: ts, AgentID: s.AgentID, TenantID: s.TenantID, Type: TypeProcessCount, Value: float64(s.ProcessCount)},
 	}
 }
 

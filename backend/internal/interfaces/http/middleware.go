@@ -9,8 +9,8 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	tenantDomain "github.com/yourorg/leo-one/internal/domain/tenant"
-	pkgauth "github.com/yourorg/leo-one/internal/pkg/auth"
 	"github.com/yourorg/leo-one/internal/interfaces/http/httpctx"
+	pkgauth "github.com/yourorg/leo-one/internal/pkg/auth"
 	"github.com/yourorg/leo-one/internal/pkg/response"
 )
 

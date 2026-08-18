@@ -54,14 +54,14 @@ func (a *Agent) IsOnline() bool {
 // MarkSeen met à jour le statut et le timestamp de dernière activité.
 func (a *Agent) MarkSeen() {
 	now := time.Now().UTC()
-	a.Status     = StatusOnline
+	a.Status = StatusOnline
 	a.LastSeenAt = &now
-	a.UpdatedAt  = now
+	a.UpdatedAt = now
 }
 
 // MarkOffline passe l'agent en état offline.
 func (a *Agent) MarkOffline() {
-	a.Status    = StatusOffline
+	a.Status = StatusOffline
 	a.UpdatedAt = time.Now().UTC()
 }
 
