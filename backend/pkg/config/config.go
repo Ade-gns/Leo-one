@@ -53,6 +53,13 @@ type Config struct {
 	RateLimitIPWindow           time.Duration
 	RateLimitAccountMaxFailures int // par email, échecs de /auth/login uniquement
 	RateLimitAccountWindow      time.Duration
+
+	// Transfert de fichiers (bibliothèque de fichiers déployables, voir
+	// internal/domain/file) — stockage sur disque local, pas de dépendance
+	// S3/MinIO (cohérent avec docker-compose.yml, qui n'en a pas).
+	FileStorageDir     string        // répertoire de stockage des fichiers uploadés
+	FileDownloadTTL    time.Duration // durée de vie du token de téléchargement signé (voir deploy-file)
+	FileMaxUploadBytes int64         // taille max acceptée par POST /api/v1/files
 }
 
 // PublicWSEndpoint construit l'URL wss:// que les agents utilisent pour se
@@ -63,6 +70,19 @@ func (c *Config) PublicWSEndpoint() string {
 		port = "8081"
 	}
 	return fmt.Sprintf("wss://%s:%s/ws/agent", c.PublicHost, port)
+}
+
+// PublicAPIEndpoint construit l'URL http:// de l'API REST que les agents
+// utilisent pour télécharger un fichier déployé (voir FileHandler.DeployFile)
+// — même serveur que /api/v1/enroll, jamais TLS (voir cmd/server/main.go :
+// httpServer.ListenAndServe(), pas ListenAndServeTLS — seul le listener WSS
+// agents l'est).
+func (c *Config) PublicAPIEndpoint() string {
+	_, port, err := net.SplitHostPort(c.ServerAddr)
+	if err != nil {
+		port = "8080"
+	}
+	return fmt.Sprintf("http://%s:%s", c.PublicHost, port)
 }
 
 // Load lit les variables d'environnement et retourne une Config.
@@ -101,6 +121,13 @@ func Load() (*Config, error) {
 		RateLimitIPWindow:           getEnvDuration("RATE_LIMIT_IP_WINDOW", time.Minute),
 		RateLimitAccountMaxFailures: getEnvInt("RATE_LIMIT_ACCOUNT_MAX_FAILURES", 5),
 		RateLimitAccountWindow:      getEnvDuration("RATE_LIMIT_ACCOUNT_WINDOW", 15*time.Minute),
+
+		// Défaut relatif (./data/files) : même raisonnement que les chemins
+		// PKI ci-dessus — le Dockerfile/docker-compose fixe un chemin absolu
+		// monté en volume en production.
+		FileStorageDir:     getEnv("FILE_STORAGE_DIR", "./data/files"),
+		FileDownloadTTL:    getEnvDuration("FILE_DOWNLOAD_TTL", 2*time.Hour),
+		FileMaxUploadBytes: int64(getEnvInt("FILE_MAX_UPLOAD_MB", 512)) * 1024 * 1024,
 	}
 
 	// Variables obligatoires

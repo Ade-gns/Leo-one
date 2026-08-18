@@ -95,6 +95,22 @@ export function useAgentCommands(agentID: string) {
   })
 }
 
+/** Une commande précise, avec polling tant qu'elle n'est pas terminée —
+ *  utilisé pour la barre de progression d'un déploiement de fichier
+ *  (Command.progress_percent, alimenté par FILE_TRANSFER_PROGRESS côté
+ *  agent). S'arrête de poller une fois status 'success'/'failed'/'timeout'. */
+export function useAgentCommand(agentID: string, commandID: string | null) {
+  return useQuery({
+    queryKey: [...agentKeys.commands(agentID), commandID],
+    queryFn:  () => agentsApi.getCommand(agentID, commandID!),
+    enabled:  !!agentID && !!commandID,
+    refetchInterval: query => {
+      const status = query.state.data?.data.status
+      return status === 'pending' || status === 'running' ? 1_500 : false
+    },
+  })
+}
+
 /** Inventaire matériel */
 export function useHardwareInventory(agentID: string) {
   return useQuery({

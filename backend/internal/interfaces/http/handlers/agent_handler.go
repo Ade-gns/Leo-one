@@ -394,6 +394,7 @@ var commandWSType = map[string]int{
 	"collect_inventory": 104, // LEO_MSG_COLLECT_INVENTORY
 	"ping":              105, // LEO_MSG_PING
 	"install_patches":   108, // LEO_MSG_INSTALL_PATCHES
+	"file_transfer":     109, // LEO_MSG_FILE_TRANSFER
 }
 
 // CreateAndDispatchCommand insère une commande en BDD et l'envoie
@@ -657,28 +658,29 @@ func (h *AgentHandler) GetCommand(w http.ResponseWriter, r *http.Request) {
 	commandID := chi.URLParam(r, "commandID")
 
 	type commandDetail struct {
-		ID          string          `json:"id"`
-		AgentID     string          `json:"agent_id"`
-		Type        string          `json:"type"`
-		Payload     json.RawMessage `json:"payload"`
-		Status      string          `json:"status"`
-		Stdout      *string         `json:"stdout,omitempty"`
-		Stderr      *string         `json:"stderr,omitempty"`
-		ExitCode    *int            `json:"exit_code,omitempty"`
-		CreatedAt   time.Time       `json:"created_at"`
-		SentAt      *time.Time      `json:"sent_at,omitempty"`
-		CompletedAt *time.Time      `json:"completed_at,omitempty"`
+		ID              string          `json:"id"`
+		AgentID         string          `json:"agent_id"`
+		Type            string          `json:"type"`
+		Payload         json.RawMessage `json:"payload"`
+		Status          string          `json:"status"`
+		Stdout          *string         `json:"stdout,omitempty"`
+		Stderr          *string         `json:"stderr,omitempty"`
+		ExitCode        *int            `json:"exit_code,omitempty"`
+		ProgressPercent *int            `json:"progress_percent,omitempty"`
+		CreatedAt       time.Time       `json:"created_at"`
+		SentAt          *time.Time      `json:"sent_at,omitempty"`
+		CompletedAt     *time.Time      `json:"completed_at,omitempty"`
 	}
 
 	var cmd commandDetail
 	err := h.pool.QueryRow(r.Context(), `
-		SELECT id, agent_id, type, payload, status, stdout, stderr, exit_code,
+		SELECT id, agent_id, type, payload, status, stdout, stderr, exit_code, progress_percent,
 		       created_at, sent_at, completed_at
 		FROM commands
 		WHERE id = $1 AND tenant_id = $2 AND agent_id = $3
 	`, commandID, tenantID, agentID).Scan(
 		&cmd.ID, &cmd.AgentID, &cmd.Type, &cmd.Payload, &cmd.Status,
-		&cmd.Stdout, &cmd.Stderr, &cmd.ExitCode,
+		&cmd.Stdout, &cmd.Stderr, &cmd.ExitCode, &cmd.ProgressPercent,
 		&cmd.CreatedAt, &cmd.SentAt, &cmd.CompletedAt,
 	)
 

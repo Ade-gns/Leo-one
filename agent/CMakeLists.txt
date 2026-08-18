@@ -25,6 +25,8 @@ set(AGENT_COMMON_SOURCES
     src/protocol.c
     src/connection.c
     src/metrics.c
+    src/http_url.c
+    src/file_transfer.c
     third_party/cjson/cJSON.c
 )
 

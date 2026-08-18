@@ -71,6 +71,24 @@ int leo_proto_build_inventory(const leo_hw_inventory_t *hw,
 int leo_proto_build_patch_inventory(const leo_patch_t *patches, int count,
                                      char *buf, size_t bufsz);
 
+/**
+ * Construit un message FILE_TRANSFER_PROGRESS pour signaler l'avancement
+ * d'un téléchargement en cours (voir file_transfer.h).
+ * @param cmd_id         UUID de la commande FILE_TRANSFER
+ * @param status         Étape courante
+ * @param percent        0-100 (indéterminé si bytes_total == 0 : envoyé à 0)
+ * @param bytes_received Octets déjà écrits sur disque
+ * @param bytes_total    Taille totale attendue (0 si inconnue)
+ * @param error_msg      Détail de l'échec si status == LEO_FILE_TRANSFER_FAILED
+ *                       (peut être NULL sinon)
+ */
+int leo_proto_build_file_transfer_progress(const char *cmd_id,
+                                            leo_file_transfer_status_t status,
+                                            int percent,
+                                            uint64_t bytes_received, uint64_t bytes_total,
+                                            const char *error_msg,
+                                            char *buf, size_t bufsz);
+
 /* ─── Désérialisation (backend → agent) ──────────────────────────────────── */
 
 /**

@@ -37,6 +37,10 @@ package http
 //  GET    /health
 //         Resp 200: {"status":"ok","version":"1.0.0","db":"ok"}
 //
+//  GET    /api/v1/files/:file_id/download?token=...
+//         Protégée par un token signé à usage unique (voir FICHIERS plus
+//         bas, section deploy-file) — jamais par un JWT, l'agent n'en a pas.
+//
 //  POST   /api/v1/enroll
 //         Body    : {
 //                     "enrollment_token": "eyJ...",
@@ -182,6 +186,43 @@ package http
 //                       "total_pending_patches":         47
 //                     }
 //                   }
+//
+// ─────────────────────────────────────────────────────────────────────────────
+// FICHIERS (bibliothèque de fichiers déployables)  [JWT requis — permission files:*]
+// ─────────────────────────────────────────────────────────────────────────────
+//
+//  GET    /api/v1/files
+//         Auth    : files:read
+//         Resp 200: {"data":[{File}]}
+//
+//  POST   /api/v1/files
+//         Auth    : files:write
+//         Body    : multipart/form-data — champ "file" (contenu), "name"
+//                   optionnel (défaut : nom du fichier uploadé)
+//         Resp 201: {"data":{File}}   (File.checksum_sha256 calculé côté serveur)
+//         Resp 409: un fichier de ce nom existe déjà dans le tenant
+//
+//  DELETE /api/v1/files/:file_id
+//         Auth    : files:write
+//         Resp 204: métadonnées + fichier sur disque supprimés
+//
+//  POST   /api/v1/agents/:agent_id/deploy-file
+//         Auth    : files:execute
+//         Body    : {"file_id": "..."}
+//         Resp 202: {"data":{"command_id":"...","status":"pending","sent":true}}
+//         Note    : génère une URL de téléchargement signée à usage unique
+//                   (voir GET .../download ci-dessous), envoyée à l'agent
+//                   dans une commande file_transfer. L'avancement du
+//                   téléchargement est consultable en pollant GET
+//                   /api/v1/agents/:agent_id/commands/:command_id
+//                   (champ "progress_percent", 0-100).
+//
+//  GET    /api/v1/files/:file_id/download?token=...
+//         Auth    : AUCUNE (route publique) — protégée par le token signé à
+//                   usage unique généré par deploy-file, jamais par un JWT
+//                   (l'agent n'en a pas). Voir ROUTES PUBLIQUES plus haut.
+//         Resp 200: contenu brut du fichier (Content-Disposition: attachment)
+//         Resp 401: token manquant, invalide, expiré, ou déjà utilisé
 //
 // ─────────────────────────────────────────────────────────────────────────────
 // MÉTRIQUES  [JWT requis — permission metrics:read]
@@ -507,6 +548,13 @@ func NewRouter(deps *Dependencies) http.Handler {
 		r.Post("/auth/refresh", RateLimitByIP(deps.AuthRateLimiter)(deps.AuthHandler.Refresh))
 		r.Post("/auth/logout", deps.AuthHandler.Logout)
 
+		// Téléchargement de fichier par l'agent : token signé à usage unique
+		// en query string (voir FileHandler.Download) — l'agent n'a pas de
+		// JWT, seule cette route de la bibliothèque de fichiers est publique.
+		// Pas de rate limiting IP : le token (256 bits aléatoires) n'est pas
+		// bruteforçable, contrairement à un mot de passe.
+		r.Get("/files/{fileID}/download", deps.FileHandler.Download)
+
 		// ── Routes protégées par JWT ──────────────────────────────────────────
 		r.Group(func(r chi.Router) {
 			r.Use(JWTMiddleware(deps.JWTVerifier))
@@ -538,10 +586,19 @@ func NewRouter(deps *Dependencies) http.Handler {
 				r.Get("/{agentID}/patches", RequirePermission("patches", "read")(deps.PatchHandler.List))
 				r.Post("/{agentID}/patches/install", RequirePermission("patches", "execute")(deps.PatchHandler.Install))
 				r.Post("/bulk-patches/install", RequirePermission("patches", "execute")(deps.PatchHandler.BulkInstall))
+
+				r.Post("/{agentID}/deploy-file", RequirePermission("files", "execute")(deps.FileHandler.DeployFile))
 			})
 
 			// Patchs — vue d'ensemble tenant (dashboard)
 			r.Get("/patches/summary", RequirePermission("patches", "read")(deps.PatchHandler.Summary))
+
+			// Bibliothèque de fichiers déployables
+			r.Route("/files", func(r chi.Router) {
+				r.Get("/", RequirePermission("files", "read")(deps.FileHandler.List))
+				r.Post("/", RequirePermission("files", "write")(deps.FileHandler.Create))
+				r.Delete("/{fileID}", RequirePermission("files", "write")(deps.FileHandler.Delete))
+			})
 
 			// Enrollment tokens
 			r.Route("/enrollment-tokens", func(r chi.Router) {

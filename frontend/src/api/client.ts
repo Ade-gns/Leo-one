@@ -42,8 +42,11 @@ async function request<T>(
 ): Promise<T> {
   const token = await getToken()
 
+  // Pas de Content-Type par défaut pour un corps FormData : le navigateur
+  // doit fixer lui-même "multipart/form-data; boundary=..." — un en-tête
+  // JSON forcé ici casserait le parsing multipart côté serveur.
   const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
+    ...(options.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
     ...(options.headers as Record<string, string>),
   }
   if (token) headers['Authorization'] = `Bearer ${token}`
@@ -94,3 +97,7 @@ export const patch = <T>(path: string, body?: unknown) =>
 /** DELETE */
 export const del = <T>(path: string) =>
   request<T>(path, { method: 'DELETE' })
+
+/** POST multipart/form-data (upload de fichier) */
+export const postForm = <T>(path: string, formData: FormData) =>
+  request<T>(path, { method: 'POST', body: formData })

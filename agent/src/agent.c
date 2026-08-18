@@ -20,6 +20,7 @@
 #include "executor.h"
 #include "inventory.h"
 #include "patches.h"
+#include "file_transfer.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -89,9 +90,11 @@ typedef enum {
                                * par l'agent — jamais de shell, jamais d'injection. */
     _EXEC_KIND_REBOOT,       /* REBOOT : argv structuré (shutdown/systemctl),
                                * idem, jamais de shell. */
-    _EXEC_KIND_INSTALL_PATCHES /* INSTALL_PATCHES : délègue à
+    _EXEC_KIND_INSTALL_PATCHES, /* INSTALL_PATCHES : délègue à
                                * leo_patches_install() (platform/) — ids déjà
                                * validés (voir _patch_id_valid), jamais de shell. */
+    _EXEC_KIND_FILE_TRANSFER  /* FILE_TRANSFER : délègue à leo_file_transfer_run()
+                               * (téléchargement HTTP + vérification SHA-256). */
 } _exec_kind_t;
 
 /* Contexte transmis à un thread d'exécution — alloué par les fonctions
@@ -119,6 +122,12 @@ typedef struct {
     char          patch_ids[LEO_PATCH_INSTALL_MAX_COUNT][LEO_PATCH_ID_MAX_LEN];
     int           patch_count;
     bool          reboot_after;
+
+    /* _EXEC_KIND_FILE_TRANSFER */
+    char          download_url[LEO_FILE_URL_MAX_LEN];
+    char          file_name[LEO_FILE_NAME_MAX_LEN];
+    char          sha256_hex[LEO_FILE_SHA256_HEX_LEN];
+    uint64_t      file_size;
 } _exec_ctx_t;
 
 /* ─── Helpers ───────────────────────────────────────────────────────────── */
@@ -523,6 +532,26 @@ static void *_exec_thread(void *arg) {
         }
         break;
     }
+
+    case _EXEC_KIND_FILE_TRANSFER: {
+        /* leo_file_transfer_run() envoie elle-même les messages
+         * FILE_TRANSFER_PROGRESS pendant le téléchargement — le CMD_RESULT
+         * construit ci-dessous, envoyé une fois à la fin comme pour toute
+         * commande, ne fait que clore la commande côté historique. */
+        char final_path[600];
+        char err_buf[256];
+        leo_error_t rc = leo_file_transfer_run(
+            ag->conn, ctx->cmd_id, ctx->download_url, ctx->file_name,
+            ctx->sha256_hex, ctx->file_size, ctx->timeout_secs,
+            final_path, sizeof(final_path), err_buf, sizeof(err_buf));
+        if (rc == LEO_OK) {
+            exit_code = 0;
+            stdout_s  = final_path;
+        } else {
+            stderr_s = err_buf[0] ? err_buf : "Échec du transfert de fichier";
+        }
+        break;
+    }
     }
 
     char buf[LEO_MAX_MSG_SIZE];
@@ -819,6 +848,69 @@ static void _dispatch_install_patches(leo_agent_t *ag, const char *cmd_id, cJSON
     }
 }
 
+/* Un transfert de fichier peut prendre bien plus longtemps qu'un script —
+ * défaut et plafond dédiés, distincts de LEO_EXEC_DEFAULT/MAX_TIMEOUT_SEC
+ * (pensés pour des scripts, 5 min par défaut). */
+#define LEO_FILE_TRANSFER_DEFAULT_TIMEOUT_SEC  1800  /* 30 min */
+#define LEO_FILE_TRANSFER_MAX_TIMEOUT_SEC      7200  /* 2h */
+
+/**
+ * Dispatch d'une commande FILE_TRANSFER : { "download_url": "...",
+ * "filename": "...", "sha256": "...", "size_bytes": <int>, "timeout_sec":
+ * <int> }. download_url/filename validés par leo_file_transfer_run()
+ * (_EXEC_KIND_FILE_TRANSFER dans _exec_thread) — ce dispatcher se contente
+ * d'extraire les champs et de vérifier leur présence minimale.
+ */
+static void _dispatch_file_transfer(leo_agent_t *ag, const char *cmd_id, cJSON *body) {
+    if (!body) {
+        _send_cmd_error(ag, cmd_id, "Requête invalide : corps manquant");
+        return;
+    }
+
+    cJSON *jurl  = cJSON_GetObjectItemCaseSensitive(body, "download_url");
+    cJSON *jname = cJSON_GetObjectItemCaseSensitive(body, "filename");
+    cJSON *jsha  = cJSON_GetObjectItemCaseSensitive(body, "sha256");
+    cJSON *jsize = cJSON_GetObjectItemCaseSensitive(body, "size_bytes");
+    cJSON *jt    = cJSON_GetObjectItemCaseSensitive(body, "timeout_sec");
+
+    if (!cJSON_IsString(jurl) || !jurl->valuestring[0] ||
+        !cJSON_IsString(jname) || !jname->valuestring[0]) {
+        LOG_WARN("FILE_TRANSFER sans 'download_url'/'filename' — ignoré (cmd_id=%s)", cmd_id);
+        _send_cmd_error(ag, cmd_id, "Requête invalide : 'download_url' et 'filename' requis");
+        return;
+    }
+
+    int timeout_secs = LEO_FILE_TRANSFER_DEFAULT_TIMEOUT_SEC;
+    if (cJSON_IsNumber(jt) && jt->valuedouble > 0)
+        timeout_secs = _json_number_clamped(jt->valuedouble, 1, LEO_FILE_TRANSFER_MAX_TIMEOUT_SEC);
+
+    if (!_reserve_exec_slot(ag, cmd_id))
+        return;
+
+    _exec_ctx_t *ctx = calloc(1, sizeof(*ctx));
+    if (!ctx) {
+        LOG_ERROR("Allocation échouée pour la commande (cmd_id=%s)", cmd_id);
+        _release_exec_slot(ag);
+        _send_cmd_error(ag, cmd_id, "Erreur interne de l'agent (allocation)");
+        return;
+    }
+    ctx->ag   = ag;
+    ctx->kind = _EXEC_KIND_FILE_TRANSFER;
+    strncpy(ctx->cmd_id, cmd_id, sizeof(ctx->cmd_id) - 1);
+    ctx->timeout_secs = timeout_secs;
+    strncpy(ctx->download_url, jurl->valuestring, sizeof(ctx->download_url) - 1);
+    strncpy(ctx->file_name, jname->valuestring, sizeof(ctx->file_name) - 1);
+    if (cJSON_IsString(jsha))
+        strncpy(ctx->sha256_hex, jsha->valuestring, sizeof(ctx->sha256_hex) - 1);
+    if (cJSON_IsNumber(jsize) && jsize->valuedouble > 0)
+        ctx->file_size = (uint64_t)jsize->valuedouble;
+
+    if (_spawn_detached(ag, cmd_id, _exec_thread, ctx, _free_exec_ctx)) {
+        LOG_INFO("FILE_TRANSFER lancé (cmd_id=%s, fichier=%s, timeout=%ds)",
+                 cmd_id, ctx->file_name, timeout_secs);
+    }
+}
+
 /** Délai par défaut avant redémarrage, en secondes — laisse le temps à
  * l'utilisateur de la machine de sauvegarder son travail. */
 #define LEO_REBOOT_DEFAULT_DELAY_SEC  60
@@ -1012,6 +1104,11 @@ static void _on_message(const char *json_str, size_t len, void *userdata) {
     case LEO_MSG_INSTALL_PATCHES:
         LOG_WARN("Commande INSTALL_PATCHES reçue (cmd_id=%s)", msg.id);
         _dispatch_install_patches(ag, msg.id, msg.body);
+        break;
+
+    case LEO_MSG_FILE_TRANSFER:
+        LOG_INFO("Commande FILE_TRANSFER reçue (cmd_id=%s)", msg.id);
+        _dispatch_file_transfer(ag, msg.id, msg.body);
         break;
 
     case LEO_MSG_FORCE_HEARTBEAT:

@@ -127,6 +127,7 @@ func main() {
 	workspaceRepo := postgres.NewWorkspaceRepo(pool)
 	auditRepo := postgres.NewAuditRepo(pool)
 	patchRepo := postgres.NewPatchRepo(pool)
+	fileRepo := postgres.NewFileRepo(pool)
 
 	// WebSocket
 	dispatcher := websocket.NewDispatcher(agentRepo, metricRepo, inventoryRepo, patchRepo, pool, log)
@@ -159,6 +160,8 @@ func main() {
 	scheduleHandler := handlers.NewScheduleHandler(pool, auditLogger)
 	auditHandler := handlers.NewAuditHandler(auditRepo)
 	patchHandler := handlers.NewPatchHandler(patchRepo, agentRepo, agentHandler, pool, auditLogger)
+	fileHandler := handlers.NewFileHandler(fileRepo, agentRepo, agentHandler,
+		cfg.FileStorageDir, cfg.FileDownloadTTL, cfg.PublicAPIEndpoint(), cfg.FileMaxUploadBytes, auditLogger)
 
 	// Routeur API REST (Chi)
 	deps := &chiRouter.Dependencies{
@@ -177,6 +180,7 @@ func main() {
 		ScheduleHandler:   scheduleHandler,
 		AuditHandler:      auditHandler,
 		PatchHandler:      patchHandler,
+		FileHandler:       fileHandler,
 		JWTVerifier:       jwtVerifier,
 		TenantRepo:        tenantRepo,
 		AuditLogger:       auditLogger,

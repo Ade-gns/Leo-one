@@ -25,13 +25,14 @@ type envelope struct {
 
 // Types de messages entrants (doivent correspondre aux constantes de leo_agent.h).
 const (
-	msgTypeHello          = 1
-	msgTypeHeartbeat      = 2
-	msgTypeMetrics        = 3
-	msgTypeInventory      = 4
-	msgTypeCmdResult      = 5
-	msgTypePong           = 7
-	msgTypePatchInventory = 8
+	msgTypeHello                = 1
+	msgTypeHeartbeat            = 2
+	msgTypeMetrics              = 3
+	msgTypeInventory            = 4
+	msgTypeCmdResult            = 5
+	msgTypePong                 = 7
+	msgTypePatchInventory       = 8
+	msgTypeFileTransferProgress = 9
 )
 
 // Intervalles envoyés dans HELLO_ACK (doivent correspondre aux défauts de
@@ -114,6 +115,17 @@ type patchItemBody struct {
 	SizeBytes uint64 `json:"size_bytes"`
 }
 
+// fileTransferProgressBody est le body du message FILE_TRANSFER_PROGRESS —
+// voir agent/src/protocol.c leo_proto_build_file_transfer_progress() côté agent.
+type fileTransferProgressBody struct {
+	CommandID     string `json:"command_id"`
+	Status        string `json:"status"`
+	Percent       int    `json:"percent"`
+	BytesReceived uint64 `json:"bytes_received"`
+	BytesTotal    uint64 `json:"bytes_total"`
+	Error         string `json:"error"`
+}
+
 // Dispatcher route les messages entrants des agents vers les use cases appropriés.
 type Dispatcher struct {
 	agentRepo     agentDomain.Repository
@@ -188,6 +200,8 @@ func (d *Dispatcher) Dispatch(client *Client, raw []byte) {
 		d.handleInventory(client, env, log)
 	case msgTypePatchInventory:
 		d.handlePatchInventory(client, env, log)
+	case msgTypeFileTransferProgress:
+		d.handleFileTransferProgress(client, env, log)
 	case msgTypePong:
 		log.Debug("PONG reçu")
 	default:
@@ -248,6 +262,7 @@ var pendingCommandWSType = map[string]int{
 	"collect_inventory": 104, // LEO_MSG_COLLECT_INVENTORY
 	"ping":              105, // LEO_MSG_PING
 	"install_patches":   108, // LEO_MSG_INSTALL_PATCHES
+	"file_transfer":     109, // LEO_MSG_FILE_TRANSFER
 }
 
 // redeliverPendingCommands renvoie à l'agent, à sa (re)connexion, les
@@ -499,6 +514,35 @@ func (d *Dispatcher) handlePatchInventory(client *Client, env envelope, log *slo
 	}
 
 	log.Info("Inventaire des patchs ingéré", "count", len(reports))
+}
+
+// handleFileTransferProgress met à jour commands.progress_percent au fil du
+// téléchargement d'un fichier par l'agent (voir FILE_TRANSFER dans
+// agent/src/file_transfer.c) — consulté par le frontend via un polling de
+// GET /api/v1/agents/:id/commands/:commandID pendant un déploiement (voir
+// AgentHandler.GetCommand). Le CMD_RESULT final (succès/échec) arrive
+// séparément, via handleCmdResult.
+func (d *Dispatcher) handleFileTransferProgress(client *Client, env envelope, log *slog.Logger) {
+	var body fileTransferProgressBody
+	if err := json.Unmarshal(env.Body, &body); err != nil {
+		log.Error("Impossible de décoder FILE_TRANSFER_PROGRESS body", "error", err)
+		return
+	}
+	if body.CommandID == "" {
+		return
+	}
+
+	_, err := d.pool.Exec(context.Background(), `
+		UPDATE commands SET progress_percent = $1
+		WHERE id = $2 AND tenant_id = $3
+	`, body.Percent, body.CommandID, client.TenantID)
+	if err != nil {
+		log.Error("Échec mise à jour de l'avancement du transfert", "error", err)
+		return
+	}
+
+	log.Debug("Avancement du transfert de fichier", "command_id", body.CommandID,
+		"status", body.Status, "percent", body.Percent)
 }
 
 // normalizePatchSeverity ramène toute valeur inattendue à "important" —

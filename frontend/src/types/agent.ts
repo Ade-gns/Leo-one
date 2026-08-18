@@ -27,18 +27,19 @@ export interface AgentListFilter {
 }
 
 export interface Command {
-  id:           string
-  agent_id:     string
-  type:         'exec_script' | 'install_pkg' | 'reboot' | 'ping'
-  payload:      Record<string, unknown>
-  status:       'pending' | 'running' | 'success' | 'failed' | 'timeout'
-  stdout?:      string
-  stderr?:      string
-  exit_code?:   number
-  created_by?:  string
-  sent_at?:     string
-  completed_at?: string
-  created_at:   string
+  id:               string
+  agent_id:         string
+  type:             'exec_script' | 'install_pkg' | 'reboot' | 'ping' | 'install_patches' | 'file_transfer'
+  payload:          Record<string, unknown>
+  status:           'pending' | 'running' | 'success' | 'failed' | 'timeout'
+  stdout?:          string
+  stderr?:          string
+  exit_code?:       number
+  progress_percent?: number  // rempli pendant un file_transfer, voir Command GetCommand
+  created_by?:      string
+  sent_at?:         string
+  completed_at?:    string
+  created_at:       string
 }
 
 export interface ExecScriptPayload {

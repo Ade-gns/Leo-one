@@ -38,10 +38,12 @@
 #  define LEO_CONFIG_DIR          "C:\\ProgramData\\LeoOne\\"
 #  define LEO_CERTS_DIR           "C:\\ProgramData\\LeoOne\\certs\\"
 #  define LEO_LOG_PATH            "C:\\ProgramData\\LeoOne\\logs\\agent.log"
+#  define LEO_WORKDIR             "C:\\ProgramData\\LeoOne\\work\\"
 #else
 #  define LEO_CONFIG_DIR          "/opt/leo-one/"
 #  define LEO_CERTS_DIR           "/opt/leo-one/certs/"
 #  define LEO_LOG_PATH            "/opt/leo-one/logs/agent.log"
+#  define LEO_WORKDIR             "/opt/leo-one/work/"
 #endif
 
 #define LEO_CONFIG_FILE           LEO_CONFIG_DIR "agent.conf"
@@ -63,6 +65,7 @@ typedef enum {
     LEO_MSG_LOG                =   6,
     LEO_MSG_PONG               =   7,
     LEO_MSG_PATCH_INVENTORY    =   8,   /* agent→backend : liste des patchs disponibles */
+    LEO_MSG_FILE_TRANSFER_PROGRESS = 9, /* agent→backend : avancement d'un téléchargement en cours */
     /* Entrants : backend → agent */
     LEO_MSG_HELLO_ACK          = 100,
     LEO_MSG_EXEC_SCRIPT        = 101,
@@ -73,6 +76,7 @@ typedef enum {
     LEO_MSG_CONFIG_UPDATE      = 106,
     LEO_MSG_FORCE_HEARTBEAT    = 107,   /* backend→agent : force immediate heartbeat */
     LEO_MSG_INSTALL_PATCHES    = 108,   /* backend→agent : installer une sélection de patchs */
+    LEO_MSG_FILE_TRANSFER      = 109,   /* backend→agent : télécharger un fichier depuis une URL signée */
     /* Sentinel */
     LEO_MSG_UNKNOWN            =  -1
 } leo_msg_type_t;
@@ -180,6 +184,23 @@ typedef struct {
     leo_patch_severity_t  severity;
     uint64_t              size_bytes;  /* 0 si indéterminable (best-effort) */
 } leo_patch_t;
+
+/* ─────────────────────────────────────────────────────────────────────────
+ * Transfert de fichiers (LEO_MSG_FILE_TRANSFER, LEO_MSG_FILE_TRANSFER_PROGRESS)
+ * ───────────────────────────────────────────────────────────────────────── */
+
+#define LEO_FILE_URL_MAX_LEN       1024  /* URL signée, avec token en query string */
+#define LEO_FILE_NAME_MAX_LEN       255  /* nom de fichier final dans LEO_WORKDIR */
+#define LEO_FILE_SHA256_HEX_LEN      65  /* 64 caractères hex + \0 */
+
+/* Reflète le statut publié dans LEO_MSG_FILE_TRANSFER_PROGRESS — voir
+ * patch_status côté backend pour le même style de cycle de vie textuel. */
+typedef enum {
+    LEO_FILE_TRANSFER_DOWNLOADING = 0,
+    LEO_FILE_TRANSFER_VERIFYING,
+    LEO_FILE_TRANSFER_COMPLETED,
+    LEO_FILE_TRANSFER_FAILED
+} leo_file_transfer_status_t;
 
 /* ─────────────────────────────────────────────────────────────────────────
  * État interne de l'agent (machine d'état)

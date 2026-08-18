@@ -228,6 +228,35 @@ int leo_proto_build_patch_inventory(const leo_patch_t *patches, int count,
     return _serialize(LEO_MSG_PATCH_INVENTORY, body, buf, bufsz);
 }
 
+static const char *_file_transfer_status_str(leo_file_transfer_status_t s) {
+    switch (s) {
+    case LEO_FILE_TRANSFER_DOWNLOADING: return "downloading";
+    case LEO_FILE_TRANSFER_VERIFYING:   return "verifying";
+    case LEO_FILE_TRANSFER_COMPLETED:   return "completed";
+    case LEO_FILE_TRANSFER_FAILED:      return "failed";
+    default:                            return "unknown";
+    }
+}
+
+int leo_proto_build_file_transfer_progress(const char *cmd_id,
+                                            leo_file_transfer_status_t status,
+                                            int percent,
+                                            uint64_t bytes_received, uint64_t bytes_total,
+                                            const char *error_msg,
+                                            char *buf, size_t bufsz) {
+    cJSON *body = cJSON_CreateObject();
+    if (!body) return -1;
+
+    cJSON_AddStringToObject(body, "command_id",     cmd_id ? cmd_id : "");
+    cJSON_AddStringToObject(body, "status",         _file_transfer_status_str(status));
+    cJSON_AddNumberToObject(body, "percent",        percent);
+    cJSON_AddNumberToObject(body, "bytes_received", (double)bytes_received);
+    cJSON_AddNumberToObject(body, "bytes_total",    (double)bytes_total);
+    if (error_msg) cJSON_AddStringToObject(body, "error", error_msg);
+
+    return _serialize(LEO_MSG_FILE_TRANSFER_PROGRESS, body, buf, bufsz);
+}
+
 /* ─── Désérialisation ───────────────────────────────────────────────────── */
 
 leo_error_t leo_proto_parse(const char *json_str, leo_incoming_msg_t *out) {

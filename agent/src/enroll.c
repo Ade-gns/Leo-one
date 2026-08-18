@@ -13,6 +13,7 @@
 #include "config.h"
 #include "crypto.h"
 #include "logger.h"
+#include "http_url.h"
 
 #include "../third_party/cjson/cJSON.h"
 
@@ -84,35 +85,12 @@ static leo_error_t _load_bootstrap(const char *path, _bootstrap_t *out) {
     return LEO_OK;
 }
 
-/** Parse "http[s]://host[:port][/chemin ignoré]" en use_ssl/host/port. Le
- *  chemin de l'API (/api/v1/enroll) est fixe côté agent, pas lu ici. */
+/** Parse "http[s]://host[:port][/chemin ignoré]" en use_ssl/host/port — le
+ *  chemin de l'API (/api/v1/enroll) est fixe côté agent, pas lu ici (voir
+ *  leo_http_parse_url dans http_url.h, partagé avec file_transfer.c). */
 static bool _parse_api_endpoint(const char *endpoint, bool *use_ssl,
                                  char *host, size_t hsz, int *port) {
-    const char *p = endpoint;
-
-    if (strncmp(p, "https://", 8) == 0)      { *use_ssl = true;  p += 8; }
-    else if (strncmp(p, "http://", 7) == 0)  { *use_ssl = false; p += 7; }
-    else                                     { *use_ssl = false; }
-
-    const char *slash = strchr(p, '/');
-    const char *colon = strchr(p, ':');
-    size_t host_len;
-
-    if (colon && (!slash || colon < slash)) {
-        host_len = (size_t)(colon - p);
-        if (host_len == 0 || host_len >= hsz) return false;
-        strncpy(host, p, host_len);
-        host[host_len] = '\0';
-        *port = atoi(colon + 1);
-        if (*port <= 0 || *port > 65535) return false;
-    } else {
-        host_len = slash ? (size_t)(slash - p) : strlen(p);
-        if (host_len == 0 || host_len >= hsz) return false;
-        strncpy(host, p, host_len);
-        host[host_len] = '\0';
-        *port = *use_ssl ? 443 : 80;
-    }
-    return true;
+    return leo_http_parse_url(endpoint, use_ssl, host, hsz, port, NULL, 0);
 }
 
 /* ─── Détection de la machine locale ────────────────────────────────────── */
