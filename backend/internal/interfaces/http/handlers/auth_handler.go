@@ -18,24 +18,30 @@ import (
 	"golang.org/x/crypto/argon2"
 
 	pkgauth "github.com/yourorg/leo-one/internal/pkg/auth"
+	"github.com/yourorg/leo-one/internal/pkg/ratelimit"
 	"github.com/yourorg/leo-one/internal/pkg/response"
 )
 
 // AuthHandler gère les requêtes d'authentification.
 type AuthHandler struct {
-	pool        *pgxpool.Pool
-	jwtVerifier *pkgauth.JWTVerifier
-	accessTTL   time.Duration
-	refreshTTL  time.Duration
+	pool           *pgxpool.Pool
+	jwtVerifier    *pkgauth.JWTVerifier
+	accessTTL      time.Duration
+	refreshTTL     time.Duration
+	accountLimiter *ratelimit.Limiter // verrouillage par compte (email), échecs de Login uniquement
 }
 
-// NewAuthHandler crée un AuthHandler avec ses dépendances.
-func NewAuthHandler(pool *pgxpool.Pool, jwtVerifier *pkgauth.JWTVerifier, accessTTL, refreshTTL time.Duration) *AuthHandler {
+// NewAuthHandler crée un AuthHandler avec ses dépendances. accountLimiter
+// peut être nil (verrouillage par compte désactivé, ex. dans les tests) —
+// le rate limiting par IP sur ces routes est géré séparément par
+// RateLimitByIP au niveau du routeur.
+func NewAuthHandler(pool *pgxpool.Pool, jwtVerifier *pkgauth.JWTVerifier, accessTTL, refreshTTL time.Duration, accountLimiter *ratelimit.Limiter) *AuthHandler {
 	return &AuthHandler{
-		pool:        pool,
-		jwtVerifier: jwtVerifier,
-		accessTTL:   accessTTL,
-		refreshTTL:  refreshTTL,
+		pool:           pool,
+		jwtVerifier:    jwtVerifier,
+		accessTTL:      accessTTL,
+		refreshTTL:     refreshTTL,
+		accountLimiter: accountLimiter,
 	}
 }
 
@@ -68,6 +74,16 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Verrouillage par compte : vérifié avant même la requête BDD, sur les
+	// échecs déjà enregistrés (RecordFailure ci-dessous) — un login réussi
+	// remet le compteur à zéro (Reset), donc un utilisateur légitime qui a
+	// fini par retrouver son mot de passe n'en subit pas les conséquences.
+	emailKey := strings.ToLower(strings.TrimSpace(req.Email))
+	if h.accountLimiter != nil && h.accountLimiter.Blocked(emailKey) {
+		response.Error(w, http.StatusTooManyRequests, "RATE_LIMITED", "trop de tentatives échouées sur ce compte, réessayez plus tard")
+		return
+	}
+
 	// Lookup utilisateur en BDD
 	type userRow struct {
 		ID           string
@@ -97,23 +113,32 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		&u.MFAEnabled, &u.CreatedAt, &u.UpdatedAt, &u.IsAdmin)
 
 	if errors.Is(err, pgx.ErrNoRows) {
+		h.recordLoginFailure(emailKey)
 		response.Error(w, http.StatusUnauthorized, "UNAUTHORIZED", "email ou mot de passe invalide")
 		return
 	}
 	if err != nil {
+		// Erreur système, pas un échec d'authentification : ne compte pas
+		// contre le verrouillage du compte.
 		response.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "erreur de base de données")
 		return
 	}
 
 	if !u.IsActive {
+		h.recordLoginFailure(emailKey)
 		response.Error(w, http.StatusForbidden, "FORBIDDEN", "compte désactivé")
 		return
 	}
 
 	// Vérification du hash argon2id
 	if !verifyArgon2id(req.Password, u.PasswordHash) {
+		h.recordLoginFailure(emailKey)
 		response.Error(w, http.StatusUnauthorized, "UNAUTHORIZED", "email ou mot de passe invalide")
 		return
+	}
+
+	if h.accountLimiter != nil {
+		h.accountLimiter.Reset(emailKey)
 	}
 
 	// Génération des tokens
@@ -164,6 +189,15 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 			"updated_at":  u.UpdatedAt,
 		},
 	})
+}
+
+// recordLoginFailure enregistre un échec de connexion pour le verrouillage
+// par compte (no-op si accountLimiter est nil — tests, ou déploiements où
+// il n'est pas souhaité).
+func (h *AuthHandler) recordLoginFailure(emailKey string) {
+	if h.accountLimiter != nil {
+		h.accountLimiter.RecordFailure(emailKey)
+	}
 }
 
 // Refresh génère un nouvel access token depuis un refresh token valide.

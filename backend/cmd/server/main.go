@@ -28,6 +28,7 @@ import (
 	"github.com/yourorg/leo-one/internal/interfaces/http/handlers"
 	wsHandler "github.com/yourorg/leo-one/internal/interfaces/ws"
 	pkgauth "github.com/yourorg/leo-one/internal/pkg/auth"
+	"github.com/yourorg/leo-one/internal/pkg/ratelimit"
 	"github.com/yourorg/leo-one/internal/scheduler"
 	"github.com/yourorg/leo-one/pkg/config"
 	"github.com/yourorg/leo-one/pkg/logger"
@@ -136,9 +137,13 @@ func main() {
 	// Auth
 	jwtVerifier := pkgauth.NewJWTVerifier(jwtSecret)
 
+	// Rate limiting (routes publiques sensibles — voir internal/pkg/ratelimit)
+	authIPLimiter := ratelimit.New(cfg.RateLimitIPMaxAttempts, cfg.RateLimitIPWindow)
+	accountLimiter := ratelimit.New(cfg.RateLimitAccountMaxFailures, cfg.RateLimitAccountWindow)
+
 	// Handlers
 	auditLogger := handlers.NewAuditLogger(auditRepo, log)
-	authHandler := handlers.NewAuthHandler(pool, jwtVerifier, cfg.JWTAccessTTL, cfg.JWTRefreshTTL)
+	authHandler := handlers.NewAuthHandler(pool, jwtVerifier, cfg.JWTAccessTTL, cfg.JWTRefreshTTL, accountLimiter)
 	agentHandler := handlers.NewAgentHandler(agentRepo, pool, hub, ca, serverFingerprint, cfg.PublicWSEndpoint(), auditLogger)
 	metricHandler := handlers.NewMetricHandler(metricRepo)
 	dashboardHandler := handlers.NewDashboardHandler(pool)
@@ -172,6 +177,7 @@ func main() {
 		JWTVerifier:       jwtVerifier,
 		TenantRepo:        tenantRepo,
 		AuditLogger:       auditLogger,
+		AuthRateLimiter:   authIPLimiter,
 		Logger:            log,
 	}
 	apiRouter := chiRouter.NewRouter(deps)

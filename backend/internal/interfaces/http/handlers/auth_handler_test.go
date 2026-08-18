@@ -11,6 +11,7 @@ import (
 	"golang.org/x/crypto/argon2"
 
 	pkgauth "github.com/yourorg/leo-one/internal/pkg/auth"
+	"github.com/yourorg/leo-one/internal/pkg/ratelimit"
 )
 
 // makeArgon2idHash construit un hash au format PHC avec des paramètres
@@ -106,7 +107,7 @@ func TestParseArgon2idHash(t *testing.T) {
 }
 
 func TestAuthHandler_Logout(t *testing.T) {
-	h := NewAuthHandler(nil, nil, time.Minute, time.Hour)
+	h := NewAuthHandler(nil, nil, time.Minute, time.Hour, nil)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", bytes.NewBufferString(`{}`))
 	rec := httptest.NewRecorder()
 
@@ -121,7 +122,7 @@ func TestAuthHandler_Logout(t *testing.T) {
 // sont testables sans base de données réelle (le handler utilise *pgxpool.Pool
 // directement plutôt qu'une interface injectable).
 func TestAuthHandler_Login_ValidationOnly(t *testing.T) {
-	h := NewAuthHandler(nil, nil, time.Minute, time.Hour)
+	h := NewAuthHandler(nil, nil, time.Minute, time.Hour, nil)
 
 	t.Run("corps invalide retourne 400", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewBufferString(`not-json`))
@@ -157,9 +158,51 @@ func TestAuthHandler_Login_ValidationOnly(t *testing.T) {
 	})
 }
 
+// TestAuthHandler_Login_AccountLockout vérifie que le verrouillage par
+// compte est appliqué avant toute requête BDD (pool est nil ici — le test
+// échouerait avec un nil pointer dereference si Login essayait de l'utiliser
+// avant de vérifier le verrouillage), donc testable sans base réelle.
+func TestAuthHandler_Login_AccountLockout(t *testing.T) {
+	limiter := ratelimit.New(1, time.Minute)
+	h := NewAuthHandler(nil, nil, time.Minute, time.Hour, limiter)
+
+	// Épuise le quota (max=1) pour ce compte, comme le ferait un échec de Login.
+	limiter.RecordFailure("locked@example.com")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login",
+		bytes.NewBufferString(`{"email":"locked@example.com","password":"whatever"}`))
+	rec := httptest.NewRecorder()
+
+	h.Login(rec, req)
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("code = %d, attendu %d, body=%s", rec.Code, http.StatusTooManyRequests, rec.Body.String())
+	}
+}
+
+// TestAuthHandler_Login_AccountLockout_CaseInsensitive vérifie que la clé de
+// verrouillage est normalisée (email en minuscules, trim) — un attaquant ne
+// doit pas pouvoir contourner le compteur en variant la casse.
+func TestAuthHandler_Login_AccountLockout_CaseInsensitive(t *testing.T) {
+	limiter := ratelimit.New(1, time.Minute)
+	h := NewAuthHandler(nil, nil, time.Minute, time.Hour, limiter)
+
+	limiter.RecordFailure("locked@example.com")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login",
+		bytes.NewBufferString(`{"email":"  LOCKED@Example.com  ","password":"whatever"}`))
+	rec := httptest.NewRecorder()
+
+	h.Login(rec, req)
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("code = %d, attendu %d, body=%s", rec.Code, http.StatusTooManyRequests, rec.Body.String())
+	}
+}
+
 func TestAuthHandler_Refresh_ValidationOnly(t *testing.T) {
 	verifier := pkgauth.NewJWTVerifier("test-secret")
-	h := NewAuthHandler(nil, verifier, time.Minute, time.Hour)
+	h := NewAuthHandler(nil, verifier, time.Minute, time.Hour, nil)
 
 	t.Run("corps invalide retourne 400", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/refresh", bytes.NewBufferString(`not-json`))

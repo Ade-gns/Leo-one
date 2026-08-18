@@ -20,11 +20,15 @@ package http
 //         Resp 200: {"data":{"access_token":"...","refresh_token":"...","expires_in":900}}
 //         Resp 401: email/mot de passe invalide
 //         Resp 403: compte désactivé
+//         Resp 429: trop de requêtes depuis cette IP, ou trop d'échecs
+//                   récents sur ce compte (rate limiting, voir RateLimitByIP
+//                   et le verrouillage par compte dans AuthHandler.Login)
 //
 //  POST   /api/v1/auth/refresh
 //         Body    : {"refresh_token":"..."}
 //         Resp 200: {"data":{"access_token":"...","expires_in":900}}
 //         Resp 401: refresh token invalide ou expiré
+//         Resp 429: trop de requêtes depuis cette IP (rate limiting)
 //
 //  POST   /api/v1/auth/logout
 //         Body    : {"refresh_token":"..."}
@@ -55,6 +59,7 @@ package http
 //                   }
 //         Resp 400: token malformé
 //         Resp 401: token invalide, expiré, ou déjà utilisé
+//         Resp 429: trop de requêtes depuis cette IP (rate limiting)
 //
 // ─────────────────────────────────────────────────────────────────────────────
 // WEBSOCKET — Connexion des agents (authentification mTLS, pas JWT)
@@ -427,6 +432,9 @@ package http
 //  MFA_INVALID           : code TOTP incorrect
 //  SYSTEM_ROLE_IMMUTABLE : tentative de modifier un rôle système
 //  TENANT_LIMIT_REACHED  : quota d'agents du plan atteint
+//  RATE_LIMITED          : trop de requêtes (par IP) ou trop d'échecs
+//                          d'authentification récents (par compte) — voir
+//                          RateLimitByIP et AuthHandler.Login
 //
 
 import (
@@ -451,10 +459,13 @@ func NewRouter(deps *Dependencies) http.Handler {
 	r.Get("/health", deps.AuthHandler.Health)
 
 	r.Route("/api/v1", func(r chi.Router) {
-		// Enrollment et auth : pas de JWT
-		r.Post("/enroll", deps.AgentHandler.Enroll)
-		r.Post("/auth/login", deps.AuthHandler.Login)
-		r.Post("/auth/refresh", deps.AuthHandler.Refresh)
+		// Enrollment et auth : pas de JWT — rate limitées par IP (voir
+		// RateLimitByIP et le point 5 du cahier des charges : brute force sur
+		// /auth/login notamment). /auth/logout n'a pas de valeur pour un
+		// attaquant (idempotent, ne révèle rien) et n'est pas limitée.
+		r.Post("/enroll", RateLimitByIP(deps.AuthRateLimiter)(deps.AgentHandler.Enroll))
+		r.Post("/auth/login", RateLimitByIP(deps.AuthRateLimiter)(deps.AuthHandler.Login))
+		r.Post("/auth/refresh", RateLimitByIP(deps.AuthRateLimiter)(deps.AuthHandler.Refresh))
 		r.Post("/auth/logout", deps.AuthHandler.Logout)
 
 		// ── Routes protégées par JWT ──────────────────────────────────────────

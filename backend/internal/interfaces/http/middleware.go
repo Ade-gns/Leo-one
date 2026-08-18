@@ -12,6 +12,7 @@ import (
 	tenantDomain "github.com/yourorg/leo-one/internal/domain/tenant"
 	"github.com/yourorg/leo-one/internal/interfaces/http/httpctx"
 	pkgauth "github.com/yourorg/leo-one/internal/pkg/auth"
+	"github.com/yourorg/leo-one/internal/pkg/ratelimit"
 	"github.com/yourorg/leo-one/internal/pkg/response"
 )
 
@@ -79,6 +80,23 @@ func JWTMiddleware(verifier *pkgauth.JWTVerifier) func(http.Handler) http.Handle
 
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
+	}
+}
+
+// RateLimitByIP limite le nombre de requêtes par IP cliente sur la route
+// décorée (fenêtre glissante portée par rl) — utilisé sur les routes
+// publiques sensibles (login, refresh, enroll) pour limiter le brute force.
+// Voir aussi le verrouillage par compte dans AuthHandler.Login : une limite
+// distincte, par email, qui ne compte que les échecs d'authentification.
+func RateLimitByIP(rl *ratelimit.Limiter) func(http.HandlerFunc) http.HandlerFunc {
+	return func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if !rl.Allow(clientIP(r)) {
+				response.Error(w, http.StatusTooManyRequests, "RATE_LIMITED", "trop de requêtes, réessayez plus tard")
+				return
+			}
+			next(w, r)
+		}
 	}
 }
 

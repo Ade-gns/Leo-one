@@ -45,6 +45,14 @@ type Config struct {
 
 	// Logging
 	LogLevel string // "debug" | "info" | "warn" | "error"
+
+	// Rate limiting (routes publiques sensibles : /auth/login, /auth/refresh,
+	// /enroll) — voir internal/pkg/ratelimit. Compteur en mémoire, adapté à un
+	// déploiement mono-instance (pas de Redis dans docker-compose.yml).
+	RateLimitIPMaxAttempts      int // par IP, toutes les routes ci-dessus
+	RateLimitIPWindow           time.Duration
+	RateLimitAccountMaxFailures int // par email, échecs de /auth/login uniquement
+	RateLimitAccountWindow      time.Duration
 }
 
 // PublicWSEndpoint construit l'URL wss:// que les agents utilisent pour se
@@ -88,6 +96,11 @@ func Load() (*Config, error) {
 		PublicHost: getEnv("PUBLIC_HOST", "localhost"),
 
 		LogLevel: getEnv("LOG_LEVEL", "info"),
+
+		RateLimitIPMaxAttempts:      getEnvInt("RATE_LIMIT_IP_MAX_ATTEMPTS", 20),
+		RateLimitIPWindow:           getEnvDuration("RATE_LIMIT_IP_WINDOW", time.Minute),
+		RateLimitAccountMaxFailures: getEnvInt("RATE_LIMIT_ACCOUNT_MAX_FAILURES", 5),
+		RateLimitAccountWindow:      getEnvDuration("RATE_LIMIT_ACCOUNT_WINDOW", 15*time.Minute),
 	}
 
 	// Variables obligatoires
