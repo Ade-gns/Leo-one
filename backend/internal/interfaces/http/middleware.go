@@ -2,6 +2,7 @@ package http
 
 import (
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -74,10 +75,23 @@ func JWTMiddleware(verifier *pkgauth.JWTVerifier) func(http.Handler) http.Handle
 			ctx = httpctx.WithUserID(ctx, userID)
 			ctx = httpctx.WithTenantID(ctx, tenantID)
 			ctx = httpctx.WithIsAdmin(ctx, isAdmin)
+			ctx = httpctx.WithIP(ctx, clientIP(r))
 
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+// clientIP extrait l'adresse IP seule de r.RemoteAddr — normalisé en amont
+// par middleware.RealIP (voir router.go) selon X-Forwarded-For/X-Real-IP
+// quand présents, sinon adresse de la connexion TCP brute (host:port). Utilisé
+// pour la traçabilité du journal d'audit (voir internal/domain/audit).
+func clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
 }
 
 // TenantMiddleware charge le tenant depuis le repo et le place dans le contexte.
@@ -138,5 +152,22 @@ func RequirePermission(resource, action string) func(http.HandlerFunc) http.Hand
 			response.Error(w, http.StatusForbidden, "FORBIDDEN",
 				"permission insuffisante: "+resource+":"+action+" requise")
 		}
+	}
+}
+
+// RequireAdmin restreint une route aux utilisateurs administrateurs (claim
+// is_admin du JWT), quel que soit leur rôle personnalisé. Utilisé pour le
+// journal d'audit : RequirePermission ne peut pas exprimer "réservé aux
+// admins" tant que la vérification RBAC granulaire reste un stub (voir son
+// commentaire ci-dessus) — celui-ci autorise aujourd'hui tout utilisateur
+// authentifié sur une action "read", quelle que soit la ressource, ce qui
+// est trop permissif pour l'audit.
+func RequireAdmin(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !httpctx.IsAdminFromContext(r.Context()) {
+			response.Error(w, http.StatusForbidden, "FORBIDDEN", "réservé aux administrateurs")
+			return
+		}
+		next(w, r)
 	}
 }

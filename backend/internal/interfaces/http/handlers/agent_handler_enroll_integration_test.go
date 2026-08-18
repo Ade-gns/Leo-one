@@ -61,7 +61,7 @@ func (nopWriter) Write(p []byte) (int, error) { return len(p), nil }
 // (même chemin que la production) et retourne sa valeur brute.
 func createRawToken(t *testing.T, pool *pgxpool.Pool, tenantID string) string {
 	t.Helper()
-	h := NewEnrollmentHandler(pool)
+	h := NewEnrollmentHandler(pool, nil)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/enrollment-tokens", bytes.NewBufferString(`{}`))
 	req = req.WithContext(httpctx.WithTenantID(req.Context(), tenantID))
 	rec := httptest.NewRecorder()
@@ -110,7 +110,7 @@ func TestAgentHandler_Enroll_Success_Integration(t *testing.T) {
 	pool := testutil.TestDB(t)
 	tenantID := testutil.SeedTenant(t, pool, "Enroll Corp", 10)
 	ca := newTestCA(t)
-	h := NewAgentHandler(postgres.NewAgentRepo(pool), pool, newTestHub(pool), ca, "deadbeef", "wss://test/ws/agent")
+	h := NewAgentHandler(postgres.NewAgentRepo(pool), pool, newTestHub(pool), ca, "deadbeef", "wss://test/ws/agent", nil)
 
 	token := createRawToken(t, pool, tenantID)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/enroll", enrollRequestBody(token, "srv-enroll-01", "hw-success-1"))
@@ -175,7 +175,7 @@ func TestAgentHandler_Enroll_UnknownToken_Integration(t *testing.T) {
 	pool := testutil.TestDB(t)
 	testutil.SeedTenant(t, pool, "Unknown Token Corp", 10)
 	ca := newTestCA(t)
-	h := NewAgentHandler(postgres.NewAgentRepo(pool), pool, newTestHub(pool), ca, "fp", "wss://test/ws/agent")
+	h := NewAgentHandler(postgres.NewAgentRepo(pool), pool, newTestHub(pool), ca, "fp", "wss://test/ws/agent", nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/enroll", enrollRequestBody("token-inexistant", "srv", "hw-unknown"))
 	rec := httptest.NewRecorder()
@@ -191,7 +191,7 @@ func TestAgentHandler_Enroll_ExpiredToken_Integration(t *testing.T) {
 	pool := testutil.TestDB(t)
 	tenantID := testutil.SeedTenant(t, pool, "Expired Token Corp", 10)
 	ca := newTestCA(t)
-	h := NewAgentHandler(postgres.NewAgentRepo(pool), pool, newTestHub(pool), ca, "fp", "wss://test/ws/agent")
+	h := NewAgentHandler(postgres.NewAgentRepo(pool), pool, newTestHub(pool), ca, "fp", "wss://test/ws/agent", nil)
 
 	token := insertRawToken(t, pool, tenantID, time.Now().Add(-time.Hour), nil)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/enroll", enrollRequestBody(token, "srv", "hw-expired"))
@@ -213,7 +213,7 @@ func TestAgentHandler_Enroll_UsedToken_Integration(t *testing.T) {
 	pool := testutil.TestDB(t)
 	tenantID := testutil.SeedTenant(t, pool, "Used Token Corp", 10)
 	ca := newTestCA(t)
-	h := NewAgentHandler(postgres.NewAgentRepo(pool), pool, newTestHub(pool), ca, "fp", "wss://test/ws/agent")
+	h := NewAgentHandler(postgres.NewAgentRepo(pool), pool, newTestHub(pool), ca, "fp", "wss://test/ws/agent", nil)
 
 	token := createRawToken(t, pool, tenantID)
 
@@ -244,7 +244,7 @@ func TestAgentHandler_Enroll_DuplicateHardwareID_Integration(t *testing.T) {
 	pool := testutil.TestDB(t)
 	tenantID := testutil.SeedTenant(t, pool, "Dup HW Corp", 10)
 	ca := newTestCA(t)
-	h := NewAgentHandler(postgres.NewAgentRepo(pool), pool, newTestHub(pool), ca, "fp", "wss://test/ws/agent")
+	h := NewAgentHandler(postgres.NewAgentRepo(pool), pool, newTestHub(pool), ca, "fp", "wss://test/ws/agent", nil)
 
 	token1 := createRawToken(t, pool, tenantID)
 	req1 := httptest.NewRequest(http.MethodPost, "/api/v1/enroll", enrollRequestBody(token1, "srv-1", "hw-dup"))
@@ -268,7 +268,7 @@ func TestAgentHandler_Enroll_QuotaReached_Integration(t *testing.T) {
 	pool := testutil.TestDB(t)
 	tenantID := testutil.SeedTenant(t, pool, "Quota Corp", 1) // max_agents = 1
 	ca := newTestCA(t)
-	h := NewAgentHandler(postgres.NewAgentRepo(pool), pool, newTestHub(pool), ca, "fp", "wss://test/ws/agent")
+	h := NewAgentHandler(postgres.NewAgentRepo(pool), pool, newTestHub(pool), ca, "fp", "wss://test/ws/agent", nil)
 
 	token1 := createRawToken(t, pool, tenantID)
 	rec1 := httptest.NewRecorder()
@@ -290,7 +290,7 @@ func TestAgentHandler_RevokeCertificate_Integration(t *testing.T) {
 	pool := testutil.TestDB(t)
 	tenantID := testutil.SeedTenant(t, pool, "Revoke Corp", 10)
 	ca := newTestCA(t)
-	h := NewAgentHandler(postgres.NewAgentRepo(pool), pool, newTestHub(pool), ca, "fp", "wss://test/ws/agent")
+	h := NewAgentHandler(postgres.NewAgentRepo(pool), pool, newTestHub(pool), ca, "fp", "wss://test/ws/agent", nil)
 
 	// Enrôle un agent pour obtenir un certificat actif à révoquer.
 	token := createRawToken(t, pool, tenantID)

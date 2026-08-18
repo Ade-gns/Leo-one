@@ -32,7 +32,7 @@ func decodeEnvelope(t *testing.T, body *bytes.Buffer) map[string]any {
 
 func TestAgentHandler_List(t *testing.T) {
 	t.Run("tenant_id manquant retourne 401", func(t *testing.T) {
-		h := NewAgentHandler(&mockAgentRepo{}, nil, nil, nil, "", "")
+		h := NewAgentHandler(&mockAgentRepo{}, nil, nil, nil, "", "", nil)
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/agents", nil)
 		rec := httptest.NewRecorder()
 
@@ -55,7 +55,7 @@ func TestAgentHandler_List(t *testing.T) {
 				return 1, nil
 			},
 		}
-		h := NewAgentHandler(repo, nil, nil, nil, "", "")
+		h := NewAgentHandler(repo, nil, nil, nil, "", "", nil)
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/agents", nil)
 		req = req.WithContext(httpctx.WithTenantID(req.Context(), "tenant-1"))
 		rec := httptest.NewRecorder()
@@ -84,7 +84,7 @@ func TestAgentHandler_List(t *testing.T) {
 				return nil, "", errors.New("boom")
 			},
 		}
-		h := NewAgentHandler(repo, nil, nil, nil, "", "")
+		h := NewAgentHandler(repo, nil, nil, nil, "", "", nil)
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/agents", nil)
 		req = req.WithContext(httpctx.WithTenantID(req.Context(), "tenant-1"))
 		rec := httptest.NewRecorder()
@@ -104,7 +104,7 @@ func TestAgentHandler_List(t *testing.T) {
 				return nil, "", nil
 			},
 		}
-		h := NewAgentHandler(repo, nil, nil, nil, "", "")
+		h := NewAgentHandler(repo, nil, nil, nil, "", "", nil)
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/agents?limit=9999", nil)
 		req = req.WithContext(httpctx.WithTenantID(req.Context(), "tenant-1"))
 		rec := httptest.NewRecorder()
@@ -124,7 +124,7 @@ func TestAgentHandler_Get(t *testing.T) {
 				return &agentDomain.Agent{ID: agentID, TenantID: tenantID}, nil
 			},
 		}
-		h := NewAgentHandler(repo, nil, nil, nil, "", "")
+		h := NewAgentHandler(repo, nil, nil, nil, "", "", nil)
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/agents/a1", nil)
 		req = withURLParam(req, "agentID", "a1")
 		rec := httptest.NewRecorder()
@@ -142,7 +142,7 @@ func TestAgentHandler_Get(t *testing.T) {
 				return nil, nil
 			},
 		}
-		h := NewAgentHandler(repo, nil, nil, nil, "", "")
+		h := NewAgentHandler(repo, nil, nil, nil, "", "", nil)
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/agents/unknown", nil)
 		req = withURLParam(req, "agentID", "unknown")
 		rec := httptest.NewRecorder()
@@ -160,7 +160,7 @@ func TestAgentHandler_Get(t *testing.T) {
 				return nil, errors.New("db down")
 			},
 		}
-		h := NewAgentHandler(repo, nil, nil, nil, "", "")
+		h := NewAgentHandler(repo, nil, nil, nil, "", "", nil)
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/agents/a1", nil)
 		req = withURLParam(req, "agentID", "a1")
 		rec := httptest.NewRecorder()
@@ -185,7 +185,7 @@ func TestAgentHandler_Update(t *testing.T) {
 				return nil
 			},
 		}
-		h := NewAgentHandler(repo, nil, nil, nil, "", "")
+		h := NewAgentHandler(repo, nil, nil, nil, "", "", nil)
 		body := bytes.NewBufferString(`{"hostname":"new-name"}`)
 		req := httptest.NewRequest(http.MethodPatch, "/api/v1/agents/a1", body)
 		req = withURLParam(req, "agentID", "a1")
@@ -207,7 +207,7 @@ func TestAgentHandler_Update(t *testing.T) {
 				return &agentDomain.Agent{ID: agentID}, nil
 			},
 		}
-		h := NewAgentHandler(repo, nil, nil, nil, "", "")
+		h := NewAgentHandler(repo, nil, nil, nil, "", "", nil)
 		body := bytes.NewBufferString(`not-json`)
 		req := httptest.NewRequest(http.MethodPatch, "/api/v1/agents/a1", body)
 		req = withURLParam(req, "agentID", "a1")
@@ -231,7 +231,7 @@ func TestAgentHandler_Update(t *testing.T) {
 				return nil
 			},
 		}
-		h := NewAgentHandler(repo, nil, nil, nil, "", "")
+		h := NewAgentHandler(repo, nil, nil, nil, "", "", nil)
 		body := bytes.NewBufferString(`{"hostname":"new-name"}`)
 		req := httptest.NewRequest(http.MethodPatch, "/api/v1/agents/a1", body)
 		req = withURLParam(req, "agentID", "a1")
@@ -256,7 +256,7 @@ func TestAgentHandler_Update(t *testing.T) {
 				return errors.New("boom")
 			},
 		}
-		h := NewAgentHandler(repo, nil, nil, nil, "", "")
+		h := NewAgentHandler(repo, nil, nil, nil, "", "", nil)
 		body := bytes.NewBufferString(`{"hostname":"new-name"}`)
 		req := httptest.NewRequest(http.MethodPatch, "/api/v1/agents/a1", body)
 		req = withURLParam(req, "agentID", "a1")
@@ -277,7 +277,7 @@ func TestAgentHandler_Delete(t *testing.T) {
 				return nil
 			},
 		}
-		h := NewAgentHandler(repo, nil, nil, nil, "", "")
+		h := NewAgentHandler(repo, nil, nil, nil, "", "", nil)
 		req := httptest.NewRequest(http.MethodDelete, "/api/v1/agents/a1", nil)
 		req = withURLParam(req, "agentID", "a1")
 		rec := httptest.NewRecorder()
@@ -295,7 +295,7 @@ func TestAgentHandler_Delete(t *testing.T) {
 				return errors.New("boom")
 			},
 		}
-		h := NewAgentHandler(repo, nil, nil, nil, "", "")
+		h := NewAgentHandler(repo, nil, nil, nil, "", "", nil)
 		req := httptest.NewRequest(http.MethodDelete, "/api/v1/agents/a1", nil)
 		req = withURLParam(req, "agentID", "a1")
 		rec := httptest.NewRecorder()
@@ -321,7 +321,7 @@ func TestAgentHandler_RevokeCertificate(t *testing.T) {
 				return nil, nil
 			},
 		}
-		h := NewAgentHandler(repo, nil, nil, nil, "", "")
+		h := NewAgentHandler(repo, nil, nil, nil, "", "", nil)
 		req := httptest.NewRequest(http.MethodDelete, "/api/v1/agents/a1/certificate", nil)
 		req = withURLParam(req, "agentID", "a1")
 		rec := httptest.NewRecorder()
@@ -339,7 +339,7 @@ func TestAgentHandler_RevokeCertificate(t *testing.T) {
 				return nil, errors.New("db down")
 			},
 		}
-		h := NewAgentHandler(repo, nil, nil, nil, "", "")
+		h := NewAgentHandler(repo, nil, nil, nil, "", "", nil)
 		req := httptest.NewRequest(http.MethodDelete, "/api/v1/agents/a1/certificate", nil)
 		req = withURLParam(req, "agentID", "a1")
 		rec := httptest.NewRecorder()
@@ -362,7 +362,7 @@ func TestAgentHandler_CreateCommand_WithoutDB(t *testing.T) {
 				return nil, nil
 			},
 		}
-		h := NewAgentHandler(repo, nil, nil, nil, "", "")
+		h := NewAgentHandler(repo, nil, nil, nil, "", "", nil)
 		body := bytes.NewBufferString(`{"type":"reboot"}`)
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/agents/a1/commands", body)
 		req = withURLParam(req, "agentID", "a1")
@@ -381,7 +381,7 @@ func TestAgentHandler_CreateCommand_WithoutDB(t *testing.T) {
 				return nil, errors.New("db down")
 			},
 		}
-		h := NewAgentHandler(repo, nil, nil, nil, "", "")
+		h := NewAgentHandler(repo, nil, nil, nil, "", "", nil)
 		body := bytes.NewBufferString(`{"type":"reboot"}`)
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/agents/a1/commands", body)
 		req = withURLParam(req, "agentID", "a1")
@@ -400,7 +400,7 @@ func TestAgentHandler_CreateCommand_WithoutDB(t *testing.T) {
 				return &agentDomain.Agent{ID: agentID}, nil
 			},
 		}
-		h := NewAgentHandler(repo, nil, nil, nil, "", "")
+		h := NewAgentHandler(repo, nil, nil, nil, "", "", nil)
 		body := bytes.NewBufferString(`not-json`)
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/agents/a1/commands", body)
 		req = withURLParam(req, "agentID", "a1")

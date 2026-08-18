@@ -13,7 +13,7 @@ import (
 
 func TestAlertHandler_List(t *testing.T) {
 	t.Run("tenant_id manquant retourne 401", func(t *testing.T) {
-		h := NewAlertHandler(&mockAlertRepo{})
+		h := NewAlertHandler(&mockAlertRepo{}, nil)
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/alerts", nil)
 		rec := httptest.NewRecorder()
 
@@ -33,7 +33,7 @@ func TestAlertHandler_List(t *testing.T) {
 				return []*alertDomain.Alert{{ID: "a1", TenantID: tenantID}}, "next-cursor", nil
 			},
 		}
-		h := NewAlertHandler(repo)
+		h := NewAlertHandler(repo, nil)
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/alerts", nil)
 		req = req.WithContext(httpctx.WithTenantID(req.Context(), "tenant-1"))
 		rec := httptest.NewRecorder()
@@ -61,7 +61,7 @@ func TestAlertHandler_List(t *testing.T) {
 				return nil, "", nil
 			},
 		}
-		h := NewAlertHandler(repo)
+		h := NewAlertHandler(repo, nil)
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/alerts?status=open&severity=critical&agent_id=a1", nil)
 		req = req.WithContext(httpctx.WithTenantID(req.Context(), "tenant-1"))
 		rec := httptest.NewRecorder()
@@ -85,7 +85,7 @@ func TestAlertHandler_List(t *testing.T) {
 				return nil, "", errors.New("boom")
 			},
 		}
-		h := NewAlertHandler(repo)
+		h := NewAlertHandler(repo, nil)
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/alerts", nil)
 		req = req.WithContext(httpctx.WithTenantID(req.Context(), "tenant-1"))
 		rec := httptest.NewRecorder()
@@ -105,7 +105,7 @@ func TestAlertHandler_Get(t *testing.T) {
 				return &alertDomain.Alert{ID: alertID, TenantID: tenantID}, nil
 			},
 		}
-		h := NewAlertHandler(repo)
+		h := NewAlertHandler(repo, nil)
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/alerts/al1", nil)
 		req = withURLParam(req, "alertID", "al1")
 		rec := httptest.NewRecorder()
@@ -123,7 +123,7 @@ func TestAlertHandler_Get(t *testing.T) {
 				return nil, nil
 			},
 		}
-		h := NewAlertHandler(repo)
+		h := NewAlertHandler(repo, nil)
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/alerts/unknown", nil)
 		req = withURLParam(req, "alertID", "unknown")
 		rec := httptest.NewRecorder()
@@ -141,7 +141,7 @@ func TestAlertHandler_Get(t *testing.T) {
 				return nil, errors.New("db down")
 			},
 		}
-		h := NewAlertHandler(repo)
+		h := NewAlertHandler(repo, nil)
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/alerts/al1", nil)
 		req = withURLParam(req, "alertID", "al1")
 		rec := httptest.NewRecorder()
@@ -164,7 +164,7 @@ func TestAlertHandler_Acknowledge(t *testing.T) {
 				return &alertDomain.Alert{ID: alertID, Status: alertDomain.StatusAcknowledged}, nil
 			},
 		}
-		h := NewAlertHandler(repo)
+		h := NewAlertHandler(repo, nil)
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/alerts/al1/acknowledge", nil)
 		req = req.WithContext(httpctx.WithUserID(req.Context(), "user-1"))
 		req = withURLParam(req, "alertID", "al1")
@@ -183,7 +183,7 @@ func TestAlertHandler_Acknowledge(t *testing.T) {
 				return nil, nil
 			},
 		}
-		h := NewAlertHandler(repo)
+		h := NewAlertHandler(repo, nil)
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/alerts/unknown/acknowledge", nil)
 		req = withURLParam(req, "alertID", "unknown")
 		rec := httptest.NewRecorder()
@@ -201,7 +201,7 @@ func TestAlertHandler_Acknowledge(t *testing.T) {
 				return nil, errors.New("boom")
 			},
 		}
-		h := NewAlertHandler(repo)
+		h := NewAlertHandler(repo, nil)
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/alerts/al1/acknowledge", nil)
 		req = withURLParam(req, "alertID", "al1")
 		rec := httptest.NewRecorder()
@@ -215,7 +215,7 @@ func TestAlertHandler_Acknowledge(t *testing.T) {
 }
 
 func TestAlertHandler_RulesStubsReturn501(t *testing.T) {
-	h := NewAlertHandler(&mockAlertRepo{})
+	h := NewAlertHandler(&mockAlertRepo{}, nil)
 
 	methods := map[string]func(http.ResponseWriter, *http.Request){
 		"ListRules":  h.ListRules,

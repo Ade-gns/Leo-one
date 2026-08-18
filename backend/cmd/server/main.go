@@ -124,6 +124,7 @@ func main() {
 	inventoryRepo := postgres.NewInventoryRepo(pool)
 	userRepo := postgres.NewUserRepo(pool)
 	workspaceRepo := postgres.NewWorkspaceRepo(pool)
+	auditRepo := postgres.NewAuditRepo(pool)
 
 	// WebSocket
 	dispatcher := websocket.NewDispatcher(agentRepo, metricRepo, inventoryRepo, pool, log)
@@ -136,19 +137,21 @@ func main() {
 	jwtVerifier := pkgauth.NewJWTVerifier(jwtSecret)
 
 	// Handlers
+	auditLogger := handlers.NewAuditLogger(auditRepo, log)
 	authHandler := handlers.NewAuthHandler(pool, jwtVerifier, cfg.JWTAccessTTL, cfg.JWTRefreshTTL)
-	agentHandler := handlers.NewAgentHandler(agentRepo, pool, hub, ca, serverFingerprint, cfg.PublicWSEndpoint())
+	agentHandler := handlers.NewAgentHandler(agentRepo, pool, hub, ca, serverFingerprint, cfg.PublicWSEndpoint(), auditLogger)
 	metricHandler := handlers.NewMetricHandler(metricRepo)
 	dashboardHandler := handlers.NewDashboardHandler(pool)
-	alertHandler := handlers.NewAlertHandler(alertRepo)
+	alertHandler := handlers.NewAlertHandler(alertRepo, auditLogger)
 	inventoryHandler := handlers.NewInventoryHandler(inventoryRepo)
-	enrollmentHandler := handlers.NewEnrollmentHandler(pool)
-	userHandler := handlers.NewUserHandler(userRepo)
-	roleHandler := handlers.NewRoleHandler(pool)
+	enrollmentHandler := handlers.NewEnrollmentHandler(pool, auditLogger)
+	userHandler := handlers.NewUserHandler(userRepo, auditLogger)
+	roleHandler := handlers.NewRoleHandler(pool, auditLogger)
 	workspaceHandler := handlers.NewWorkspaceHandler(workspaceRepo)
 	tenantHandler := handlers.NewTenantHandler(tenantRepo, agentRepo)
-	scriptHandler := handlers.NewScriptHandler(pool)
-	scheduleHandler := handlers.NewScheduleHandler(pool)
+	scriptHandler := handlers.NewScriptHandler(pool, auditLogger)
+	scheduleHandler := handlers.NewScheduleHandler(pool, auditLogger)
+	auditHandler := handlers.NewAuditHandler(auditRepo)
 
 	// Routeur API REST (Chi)
 	deps := &chiRouter.Dependencies{
@@ -165,8 +168,10 @@ func main() {
 		EnrollmentHandler: enrollmentHandler,
 		ScriptHandler:     scriptHandler,
 		ScheduleHandler:   scheduleHandler,
+		AuditHandler:      auditHandler,
 		JWTVerifier:       jwtVerifier,
 		TenantRepo:        tenantRepo,
+		AuditLogger:       auditLogger,
 		Logger:            log,
 	}
 	apiRouter := chiRouter.NewRouter(deps)

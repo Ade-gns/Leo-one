@@ -25,12 +25,13 @@ import (
 // boucle de fond dans internal/scheduler, pas ici : ce handler ne fait
 // qu'exposer le CRUD à l'interface web.
 type ScheduleHandler struct {
-	pool *pgxpool.Pool
+	pool  *pgxpool.Pool
+	audit *AuditLogger
 }
 
-// NewScheduleHandler crée un ScheduleHandler avec le pool de connexions fourni.
-func NewScheduleHandler(pool *pgxpool.Pool) *ScheduleHandler {
-	return &ScheduleHandler{pool: pool}
+// NewScheduleHandler crée un ScheduleHandler avec ses dépendances.
+func NewScheduleHandler(pool *pgxpool.Pool, audit *AuditLogger) *ScheduleHandler {
+	return &ScheduleHandler{pool: pool, audit: audit}
 }
 
 type scheduleRow struct {
@@ -201,6 +202,7 @@ func (h *ScheduleHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.audit.Record(r.Context(), "schedule.create", "script_schedule", scheduleID, req)
 	h.respondSchedule(w, r, http.StatusCreated, scheduleID)
 }
 
@@ -347,6 +349,7 @@ func (h *ScheduleHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.audit.Record(r.Context(), "schedule.update", "script_schedule", scheduleID, req)
 	h.respondSchedule(w, r, http.StatusOK, scheduleID)
 }
 
@@ -369,5 +372,6 @@ func (h *ScheduleHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.audit.Record(r.Context(), "schedule.delete", "script_schedule", scheduleID, nil)
 	w.WriteHeader(http.StatusNoContent)
 }

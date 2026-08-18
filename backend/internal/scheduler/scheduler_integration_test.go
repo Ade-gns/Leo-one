@@ -51,7 +51,7 @@ func TestRunDueSchedules_OneTime_DisablesAfterFiring(t *testing.T) {
 	)
 	hub := websocket.NewHub(dispatcher, log)
 	dispatcher.SetHub(hub)
-	agentHandler := handlers.NewAgentHandler(postgres.NewAgentRepo(pool), pool, hub, nil, "", "")
+	agentHandler := handlers.NewAgentHandler(postgres.NewAgentRepo(pool), pool, hub, nil, "", "", nil)
 
 	runDueSchedules(context.Background(), pool, agentHandler, log)
 

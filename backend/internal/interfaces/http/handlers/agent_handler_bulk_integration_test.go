@@ -22,7 +22,7 @@ func TestAgentHandler_BulkCreateCommand_AgentIDs_Integration(t *testing.T) {
 	agent1 := testutil.SeedAgent(t, pool, tenantID, "bulk-agent-1")
 	agent2 := testutil.SeedAgent(t, pool, tenantID, "bulk-agent-2")
 
-	h := NewAgentHandler(nil, pool, newTestHub(pool), nil, "", "")
+	h := NewAgentHandler(nil, pool, newTestHub(pool), nil, "", "", nil)
 
 	body, _ := json.Marshal(map[string]any{
 		"agent_ids": []string{agent1, agent2},
@@ -84,7 +84,7 @@ func TestAgentHandler_BulkCreateCommand_Workspace_Integration(t *testing.T) {
 	}
 	testutil.SeedAgent(t, pool, tenantID, "bulk-ws-agent-out") // hors du workspace, ne doit pas être ciblé
 
-	h := NewAgentHandler(nil, pool, newTestHub(pool), nil, "", "")
+	h := NewAgentHandler(nil, pool, newTestHub(pool), nil, "", "", nil)
 
 	body, _ := json.Marshal(map[string]any{
 		"workspace_id": workspaceID,
@@ -116,7 +116,7 @@ func TestAgentHandler_BulkCreateCommand_BothTargets_Integration(t *testing.T) {
 	userID := testutil.SeedUser(t, pool, tenantID, "bulk-both@example.com")
 	agentID := testutil.SeedAgent(t, pool, tenantID, "bulk-both-agent")
 
-	h := NewAgentHandler(nil, pool, newTestHub(pool), nil, "", "")
+	h := NewAgentHandler(nil, pool, newTestHub(pool), nil, "", "", nil)
 
 	body, _ := json.Marshal(map[string]any{
 		"agent_ids": []string{agentID}, "workspace_id": "22222222-2222-2222-2222-222222222222",
@@ -140,7 +140,7 @@ func TestAgentHandler_BulkCreateCommand_InvalidType_Integration(t *testing.T) {
 	userID := testutil.SeedUser(t, pool, tenantID, "bulk-badtype@example.com")
 	agentID := testutil.SeedAgent(t, pool, tenantID, "bulk-badtype-agent")
 
-	h := NewAgentHandler(nil, pool, newTestHub(pool), nil, "", "")
+	h := NewAgentHandler(nil, pool, newTestHub(pool), nil, "", "", nil)
 
 	body, _ := json.Marshal(map[string]any{
 		"agent_ids": []string{agentID}, "type": "nimportequoi", "payload": map[string]any{},

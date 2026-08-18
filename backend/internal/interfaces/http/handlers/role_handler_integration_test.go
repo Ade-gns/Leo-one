@@ -31,7 +31,7 @@ func TestRoleHandler_Create_Integration(t *testing.T) {
 	pool := testutil.TestDB(t)
 	tenantID := testutil.SeedTenant(t, pool, "Role Create Corp", 10)
 	permID := firstPermissionID(t, pool, "agents", "read")
-	h := NewRoleHandler(pool)
+	h := NewRoleHandler(pool, nil)
 
 	body, _ := json.Marshal(map[string]any{
 		"name": "Superviseur", "description": "Vue globale", "permission_ids": []string{permID},
@@ -61,7 +61,7 @@ func TestRoleHandler_Create_Integration(t *testing.T) {
 func TestRoleHandler_Create_EmptyName_Integration(t *testing.T) {
 	pool := testutil.TestDB(t)
 	tenantID := testutil.SeedTenant(t, pool, "Role Empty Name Corp", 10)
-	h := NewRoleHandler(pool)
+	h := NewRoleHandler(pool, nil)
 
 	body, _ := json.Marshal(map[string]any{"name": "   "})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/roles", bytes.NewReader(body))
@@ -78,7 +78,7 @@ func TestRoleHandler_Create_EmptyName_Integration(t *testing.T) {
 func TestRoleHandler_Create_InvalidPermissionID_Integration(t *testing.T) {
 	pool := testutil.TestDB(t)
 	tenantID := testutil.SeedTenant(t, pool, "Role Invalid Perm Corp", 10)
-	h := NewRoleHandler(pool)
+	h := NewRoleHandler(pool, nil)
 
 	body, _ := json.Marshal(map[string]any{
 		"name": "Rôle cassé", "permission_ids": []string{"00000000-0000-0000-0000-000000000000"},
@@ -97,7 +97,7 @@ func TestRoleHandler_Create_InvalidPermissionID_Integration(t *testing.T) {
 func TestRoleHandler_Create_DuplicateName_Integration(t *testing.T) {
 	pool := testutil.TestDB(t)
 	tenantID := testutil.SeedTenant(t, pool, "Role Dup Corp", 10)
-	h := NewRoleHandler(pool)
+	h := NewRoleHandler(pool, nil)
 
 	body, _ := json.Marshal(map[string]any{"name": "Doublon"})
 	rec1 := httptest.NewRecorder()
@@ -124,7 +124,7 @@ func TestRoleHandler_Update_Integration(t *testing.T) {
 	testutil.SeedSystemRoles(t, pool, tenantID)
 	permRead := firstPermissionID(t, pool, "agents", "read")
 	permWrite := firstPermissionID(t, pool, "agents", "write")
-	h := NewRoleHandler(pool)
+	h := NewRoleHandler(pool, nil)
 
 	createBody, _ := json.Marshal(map[string]any{"name": "Rôle initial", "permission_ids": []string{permRead}})
 	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/roles", bytes.NewReader(createBody))
@@ -215,7 +215,7 @@ func TestRoleHandler_Delete_Integration(t *testing.T) {
 	pool := testutil.TestDB(t)
 	tenantID := testutil.SeedTenant(t, pool, "Role Delete Corp", 10)
 	testutil.SeedSystemRoles(t, pool, tenantID)
-	h := NewRoleHandler(pool)
+	h := NewRoleHandler(pool, nil)
 
 	t.Run("rôle système est immuable (403)", func(t *testing.T) {
 		var adminRoleID string

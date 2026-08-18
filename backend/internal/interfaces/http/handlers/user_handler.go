@@ -23,12 +23,13 @@ const minPasswordLen = 8
 
 // UserHandler gère les requêtes HTTP pour les utilisateurs du tenant courant.
 type UserHandler struct {
-	repo userDomain.Repository
+	repo  userDomain.Repository
+	audit *AuditLogger
 }
 
 // NewUserHandler crée un UserHandler avec ses dépendances.
-func NewUserHandler(repo userDomain.Repository) *UserHandler {
-	return &UserHandler{repo: repo}
+func NewUserHandler(repo userDomain.Repository, audit *AuditLogger) *UserHandler {
+	return &UserHandler{repo: repo, audit: audit}
 }
 
 // List retourne tous les utilisateurs du tenant courant.
@@ -136,6 +137,11 @@ func (h *UserHandler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Détails d'audit construits explicitement (jamais req directement) :
+	// createUserRequest porte le mot de passe en clair, qui ne doit jamais
+	// atterrir dans le journal d'audit.
+	h.audit.Record(r.Context(), "user.create", "user", u.ID,
+		map[string]any{"email": u.Email, "full_name": u.FullName, "role_ids": req.RoleIDs})
 	response.JSON(w, http.StatusCreated, u)
 }
 
@@ -199,6 +205,8 @@ func (h *UserHandler) Update(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	h.audit.Record(r.Context(), "user.update", "user", userID, req)
+
 	updated, err := h.repo.FindByID(r.Context(), tenantID, userID)
 	if err != nil || updated == nil {
 		response.JSON(w, http.StatusOK, current)
@@ -244,6 +252,7 @@ func (h *UserHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.audit.Record(r.Context(), "user.delete", "user", userID, nil)
 	w.WriteHeader(http.StatusNoContent)
 }
 

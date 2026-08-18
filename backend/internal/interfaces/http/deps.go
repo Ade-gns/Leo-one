@@ -26,10 +26,12 @@ type Dependencies struct {
 	EnrollmentHandler *handlers.EnrollmentHandler
 	ScriptHandler     *handlers.ScriptHandler
 	ScheduleHandler   *handlers.ScheduleHandler
+	AuditHandler      *handlers.AuditHandler
 
 	// Infrastructure
 	JWTVerifier *pkgauth.JWTVerifier
 	TenantRepo  tenantDomain.Repository
+	AuditLogger *handlers.AuditLogger
 
 	// Observabilité
 	Logger *slog.Logger

@@ -17,7 +17,7 @@ func TestScriptHandler_Create_Integration(t *testing.T) {
 	pool := testutil.TestDB(t)
 	tenantID := testutil.SeedTenant(t, pool, "Script Create Corp", 10)
 	userID := testutil.SeedUser(t, pool, tenantID, "script-create@example.com")
-	h := NewScriptHandler(pool)
+	h := NewScriptHandler(pool, nil)
 
 	body, _ := json.Marshal(map[string]any{
 		"name": "Nettoyage disque", "interpreter": "bash", "content": "echo hi",
@@ -42,7 +42,7 @@ func TestScriptHandler_Create_InvalidInterpreter_Integration(t *testing.T) {
 	pool := testutil.TestDB(t)
 	tenantID := testutil.SeedTenant(t, pool, "Script Bad Interp Corp", 10)
 	userID := testutil.SeedUser(t, pool, tenantID, "script-badinterp@example.com")
-	h := NewScriptHandler(pool)
+	h := NewScriptHandler(pool, nil)
 
 	body, _ := json.Marshal(map[string]any{
 		"name": "X", "interpreter": "ruby", "content": "puts 1",
@@ -63,7 +63,7 @@ func TestScriptHandler_Create_DuplicateName_Integration(t *testing.T) {
 	pool := testutil.TestDB(t)
 	tenantID := testutil.SeedTenant(t, pool, "Script Dup Corp", 10)
 	userID := testutil.SeedUser(t, pool, tenantID, "script-dup@example.com")
-	h := NewScriptHandler(pool)
+	h := NewScriptHandler(pool, nil)
 
 	body, _ := json.Marshal(map[string]any{"name": "Doublon", "interpreter": "bash", "content": "echo 1"})
 
@@ -91,7 +91,7 @@ func TestScriptHandler_List_Integration(t *testing.T) {
 	pool := testutil.TestDB(t)
 	tenantID := testutil.SeedTenant(t, pool, "Script List Corp", 10)
 	userID := testutil.SeedUser(t, pool, tenantID, "script-list@example.com")
-	h := NewScriptHandler(pool)
+	h := NewScriptHandler(pool, nil)
 
 	for _, name := range []string{"Script A", "Script B"} {
 		body, _ := json.Marshal(map[string]any{"name": name, "interpreter": "python", "content": "print(1)"})
@@ -124,7 +124,7 @@ func TestScriptHandler_Update_Integration(t *testing.T) {
 	pool := testutil.TestDB(t)
 	tenantID := testutil.SeedTenant(t, pool, "Script Update Corp", 10)
 	userID := testutil.SeedUser(t, pool, tenantID, "script-update@example.com")
-	h := NewScriptHandler(pool)
+	h := NewScriptHandler(pool, nil)
 
 	createBody, _ := json.Marshal(map[string]any{"name": "Original", "interpreter": "bash", "content": "echo 1"})
 	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/scripts", bytes.NewReader(createBody))
@@ -171,7 +171,7 @@ func TestScriptHandler_Delete_Integration(t *testing.T) {
 	pool := testutil.TestDB(t)
 	tenantID := testutil.SeedTenant(t, pool, "Script Delete Corp", 10)
 	userID := testutil.SeedUser(t, pool, tenantID, "script-delete@example.com")
-	h := NewScriptHandler(pool)
+	h := NewScriptHandler(pool, nil)
 
 	createBody, _ := json.Marshal(map[string]any{"name": "À supprimer", "interpreter": "bash", "content": "echo 1"})
 	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/scripts", bytes.NewReader(createBody))

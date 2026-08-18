@@ -31,6 +31,7 @@ type AgentHandler struct {
 	ca                *pki.CA
 	serverFingerprint string // empreinte SHA-256 du certificat du listener WSS, à épingler côté agent
 	wsEndpoint        string // wss://<host>:<port>/ws/agent, renvoyé aux agents à l'enrollment
+	audit             *AuditLogger
 }
 
 // NewAgentHandler crée un AgentHandler avec ses dépendances.
@@ -41,6 +42,7 @@ func NewAgentHandler(
 	ca *pki.CA,
 	serverFingerprint string,
 	wsEndpoint string,
+	audit *AuditLogger,
 ) *AgentHandler {
 	return &AgentHandler{
 		agentRepo:         agentRepo,
@@ -49,6 +51,7 @@ func NewAgentHandler(
 		ca:                ca,
 		serverFingerprint: serverFingerprint,
 		wsEndpoint:        wsEndpoint,
+		audit:             audit,
 	}
 }
 
@@ -179,6 +182,7 @@ func (h *AgentHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.audit.Record(r.Context(), "agent.update", "agent", agentID, req)
 	response.JSON(w, http.StatusOK, agent)
 }
 
@@ -194,6 +198,7 @@ func (h *AgentHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.audit.Record(r.Context(), "agent.delete", "agent", agentID, nil)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -237,6 +242,7 @@ func (h *AgentHandler) RevokeCertificate(w http.ResponseWriter, r *http.Request)
 
 	h.hub.Disconnect(agentID)
 
+	h.audit.Record(r.Context(), "agent.certificate.revoke", "agent", agentID, map[string]any{"revoked_count": tag.RowsAffected()})
 	response.JSON(w, http.StatusOK, map[string]any{
 		"revoked_count": tag.RowsAffected(),
 	})
@@ -480,6 +486,7 @@ func (h *AgentHandler) CreateCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.audit.Record(r.Context(), "agent.command.create", "command", commandID, map[string]any{"agent_id": agentID, "type": req.Type})
 	response.JSON(w, http.StatusAccepted, map[string]any{
 		"command_id": commandID,
 		"status":     "pending",
@@ -586,6 +593,8 @@ func (h *AgentHandler) BulkCreateCommand(w http.ResponseWriter, r *http.Request)
 		results = append(results, bulkCommandResult{AgentID: agentID, CommandID: commandID, Sent: sent})
 	}
 
+	h.audit.Record(r.Context(), "agent.command.bulk_create", "command", "",
+		map[string]any{"type": req.Type, "target_count": len(targetIDs), "results": results})
 	response.JSON(w, http.StatusAccepted, results)
 }
 

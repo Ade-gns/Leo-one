@@ -11,6 +11,7 @@ const (
 	keyUserID   contextKey = "user_id"
 	keyTenantID contextKey = "tenant_id"
 	keyIsAdmin  contextKey = "is_admin"
+	keyIP       contextKey = "ip"
 )
 
 // WithUserID stocke le user_id dans le contexte.
@@ -28,6 +29,12 @@ func WithIsAdmin(ctx context.Context, isAdmin bool) context.Context {
 	return context.WithValue(ctx, keyIsAdmin, isAdmin)
 }
 
+// WithIP stocke l'adresse IP cliente dans le contexte (voir JWTMiddleware —
+// posée en même temps que les claims JWT, consommée par le journal d'audit).
+func WithIP(ctx context.Context, ip string) context.Context {
+	return context.WithValue(ctx, keyIP, ip)
+}
+
 // UserIDFromContext extrait le user_id du contexte.
 func UserIDFromContext(ctx context.Context) string {
 	v, _ := ctx.Value(keyUserID).(string)
@@ -43,5 +50,11 @@ func TenantIDFromContext(ctx context.Context) string {
 // IsAdminFromContext extrait le flag is_admin du contexte.
 func IsAdminFromContext(ctx context.Context) bool {
 	v, _ := ctx.Value(keyIsAdmin).(bool)
+	return v
+}
+
+// IPFromContext extrait l'adresse IP cliente du contexte.
+func IPFromContext(ctx context.Context) string {
+	v, _ := ctx.Value(keyIP).(string)
 	return v
 }

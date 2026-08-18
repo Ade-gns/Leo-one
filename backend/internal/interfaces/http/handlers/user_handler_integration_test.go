@@ -35,7 +35,7 @@ func TestUserHandler_Create_Integration(t *testing.T) {
 	tenantID := testutil.SeedTenant(t, pool, "Users Corp", 10)
 	testutil.SeedSystemRoles(t, pool, tenantID)
 	adminRoleID := roleIDByName(t, pool, tenantID, "Admin")
-	h := NewUserHandler(postgres.NewUserRepo(pool))
+	h := NewUserHandler(postgres.NewUserRepo(pool), nil)
 
 	body, _ := json.Marshal(map[string]any{
 		"email":     "Alice@Example.com", // casse volontaire : doit être normalisée
@@ -77,7 +77,7 @@ func TestUserHandler_Create_Integration(t *testing.T) {
 func TestUserHandler_Create_DuplicateEmail_Integration(t *testing.T) {
 	pool := testutil.TestDB(t)
 	tenantID := testutil.SeedTenant(t, pool, "Dup Email Corp", 10)
-	h := NewUserHandler(postgres.NewUserRepo(pool))
+	h := NewUserHandler(postgres.NewUserRepo(pool), nil)
 
 	body, _ := json.Marshal(map[string]any{
 		"email": "bob@example.com", "full_name": "Bob", "password": "password123",
@@ -103,7 +103,7 @@ func TestUserHandler_Create_DuplicateEmail_Integration(t *testing.T) {
 func TestUserHandler_Create_ShortPassword_Integration(t *testing.T) {
 	pool := testutil.TestDB(t)
 	tenantID := testutil.SeedTenant(t, pool, "Short Pw Corp", 10)
-	h := NewUserHandler(postgres.NewUserRepo(pool))
+	h := NewUserHandler(postgres.NewUserRepo(pool), nil)
 
 	body, _ := json.Marshal(map[string]any{"email": "c@example.com", "full_name": "C", "password": "short"})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/users", bytes.NewReader(body))
@@ -121,7 +121,7 @@ func TestUserHandler_List_Integration(t *testing.T) {
 	pool := testutil.TestDB(t)
 	tenantA := testutil.SeedTenant(t, pool, "List Users A", 10)
 	tenantB := testutil.SeedTenant(t, pool, "List Users B", 10)
-	h := NewUserHandler(postgres.NewUserRepo(pool))
+	h := NewUserHandler(postgres.NewUserRepo(pool), nil)
 
 	create := func(tenantID, email string) {
 		body, _ := json.Marshal(map[string]any{"email": email, "full_name": "N", "password": "password123"})
@@ -162,7 +162,7 @@ func TestUserHandler_List_Integration(t *testing.T) {
 func TestUserHandler_Get_NotFound_Integration(t *testing.T) {
 	pool := testutil.TestDB(t)
 	tenantID := testutil.SeedTenant(t, pool, "Get NotFound Corp", 10)
-	h := NewUserHandler(postgres.NewUserRepo(pool))
+	h := NewUserHandler(postgres.NewUserRepo(pool), nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/users/00000000-0000-0000-0000-000000000000", nil)
 	req = req.WithContext(httpctx.WithTenantID(req.Context(), tenantID))
@@ -180,7 +180,7 @@ func TestUserHandler_Update_Integration(t *testing.T) {
 	pool := testutil.TestDB(t)
 	tenantID := testutil.SeedTenant(t, pool, "Update Users Corp", 10)
 	testutil.SeedSystemRoles(t, pool, tenantID)
-	h := NewUserHandler(postgres.NewUserRepo(pool))
+	h := NewUserHandler(postgres.NewUserRepo(pool), nil)
 
 	createBody, _ := json.Marshal(map[string]any{"email": "u@example.com", "full_name": "Original Name", "password": "password123"})
 	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/users", bytes.NewReader(createBody))
@@ -256,7 +256,7 @@ func TestUserHandler_Update_Integration(t *testing.T) {
 func TestUserHandler_Delete_Integration(t *testing.T) {
 	pool := testutil.TestDB(t)
 	tenantID := testutil.SeedTenant(t, pool, "Delete Users Corp", 10)
-	h := NewUserHandler(postgres.NewUserRepo(pool))
+	h := NewUserHandler(postgres.NewUserRepo(pool), nil)
 
 	createBody, _ := json.Marshal(map[string]any{"email": "d@example.com", "full_name": "D", "password": "password123"})
 	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/users", bytes.NewReader(createBody))
@@ -309,7 +309,7 @@ func TestRoleHandler_List_Integration(t *testing.T) {
 	pool := testutil.TestDB(t)
 	tenantID := testutil.SeedTenant(t, pool, "Roles Corp", 10)
 	testutil.SeedSystemRoles(t, pool, tenantID)
-	h := NewRoleHandler(pool)
+	h := NewRoleHandler(pool, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/roles", nil)
 	req = req.WithContext(httpctx.WithTenantID(req.Context(), tenantID))
@@ -329,7 +329,7 @@ func TestRoleHandler_List_Integration(t *testing.T) {
 func TestRoleHandler_ListPermissions_Integration(t *testing.T) {
 	pool := testutil.TestDB(t)
 	testutil.SeedTenant(t, pool, "Perms Corp", 10)
-	h := NewRoleHandler(pool)
+	h := NewRoleHandler(pool, nil)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/permissions", nil)
 	rec := httptest.NewRecorder()

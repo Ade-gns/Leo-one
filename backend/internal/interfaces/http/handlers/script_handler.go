@@ -18,12 +18,13 @@ import (
 // ScriptHandler gère la bibliothèque de scripts réutilisables du tenant
 // courant (CRUD complet — pas de notion de script "système").
 type ScriptHandler struct {
-	pool *pgxpool.Pool
+	pool  *pgxpool.Pool
+	audit *AuditLogger
 }
 
-// NewScriptHandler crée un ScriptHandler avec le pool de connexions fourni.
-func NewScriptHandler(pool *pgxpool.Pool) *ScriptHandler {
-	return &ScriptHandler{pool: pool}
+// NewScriptHandler crée un ScriptHandler avec ses dépendances.
+func NewScriptHandler(pool *pgxpool.Pool, audit *AuditLogger) *ScriptHandler {
+	return &ScriptHandler{pool: pool, audit: audit}
 }
 
 // scriptAllowedInterpreters — mêmes valeurs que la whitelist de l'agent C
@@ -136,6 +137,7 @@ func (h *ScriptHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.audit.Record(r.Context(), "script.create", "script", scriptID, req)
 	h.respondScript(w, r, http.StatusCreated, scriptID)
 }
 
@@ -223,6 +225,7 @@ func (h *ScriptHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.audit.Record(r.Context(), "script.update", "script", scriptID, req)
 	h.respondScript(w, r, http.StatusOK, scriptID)
 }
 
@@ -244,5 +247,6 @@ func (h *ScriptHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.audit.Record(r.Context(), "script.delete", "script", scriptID, nil)
 	w.WriteHeader(http.StatusNoContent)
 }

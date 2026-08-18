@@ -22,7 +22,7 @@ import (
 // tenant/utilisateur déjà créés par l'appelant).
 func seedScript(t *testing.T, pool *pgxpool.Pool, tenantID, userID string) string {
 	t.Helper()
-	h := NewScriptHandler(pool)
+	h := NewScriptHandler(pool, nil)
 
 	body, _ := json.Marshal(map[string]any{"name": "Script pour planif", "interpreter": "bash", "content": "echo 1"})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/scripts", bytes.NewReader(body))
@@ -42,7 +42,7 @@ func TestScheduleHandler_Create_Integration(t *testing.T) {
 	userID := testutil.SeedUser(t, pool, tenantID, "sched-create@example.com")
 	scriptID := seedScript(t, pool, tenantID, userID)
 	agentID := testutil.SeedAgent(t, pool, tenantID, "sched-create-agent")
-	h := NewScheduleHandler(pool)
+	h := NewScheduleHandler(pool, nil)
 
 	body, _ := json.Marshal(map[string]any{
 		"script_id": scriptID, "name": "Nettoyage nocturne",
@@ -76,7 +76,7 @@ func TestScheduleHandler_Create_RunAt_Integration(t *testing.T) {
 	userID := testutil.SeedUser(t, pool, tenantID, "sched-runat@example.com")
 	scriptID := seedScript(t, pool, tenantID, userID)
 	agentID := testutil.SeedAgent(t, pool, tenantID, "sched-runat-agent")
-	h := NewScheduleHandler(pool)
+	h := NewScheduleHandler(pool, nil)
 
 	runAt := time.Now().Add(2 * time.Hour).UTC().Truncate(time.Second)
 	body, _ := json.Marshal(map[string]any{
@@ -112,7 +112,7 @@ func TestScheduleHandler_Create_RunAtInPast_Integration(t *testing.T) {
 	userID := testutil.SeedUser(t, pool, tenantID, "sched-runatpast@example.com")
 	scriptID := seedScript(t, pool, tenantID, userID)
 	agentID := testutil.SeedAgent(t, pool, tenantID, "sched-runatpast-agent")
-	h := NewScheduleHandler(pool)
+	h := NewScheduleHandler(pool, nil)
 
 	body, _ := json.Marshal(map[string]any{
 		"script_id": scriptID, "name": "X",
@@ -136,7 +136,7 @@ func TestScheduleHandler_Create_CronAndRunAtBoth_Integration(t *testing.T) {
 	userID := testutil.SeedUser(t, pool, tenantID, "sched-cronandrunat@example.com")
 	scriptID := seedScript(t, pool, tenantID, userID)
 	agentID := testutil.SeedAgent(t, pool, tenantID, "sched-cronandrunat-agent")
-	h := NewScheduleHandler(pool)
+	h := NewScheduleHandler(pool, nil)
 
 	body, _ := json.Marshal(map[string]any{
 		"script_id": scriptID, "name": "X", "agent_id": agentID,
@@ -160,7 +160,7 @@ func TestScheduleHandler_Create_NeitherCronNorRunAt_Integration(t *testing.T) {
 	userID := testutil.SeedUser(t, pool, tenantID, "sched-neither@example.com")
 	scriptID := seedScript(t, pool, tenantID, userID)
 	agentID := testutil.SeedAgent(t, pool, tenantID, "sched-neither-agent")
-	h := NewScheduleHandler(pool)
+	h := NewScheduleHandler(pool, nil)
 
 	body, _ := json.Marshal(map[string]any{"script_id": scriptID, "name": "X", "agent_id": agentID})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/script-schedules", bytes.NewReader(body))
@@ -180,7 +180,7 @@ func TestScheduleHandler_Create_InvalidCron_Integration(t *testing.T) {
 	tenantID := testutil.SeedTenant(t, pool, "Schedule Bad Cron Corp", 10)
 	userID := testutil.SeedUser(t, pool, tenantID, "sched-badcron@example.com")
 	scriptID := seedScript(t, pool, tenantID, userID)
-	h := NewScheduleHandler(pool)
+	h := NewScheduleHandler(pool, nil)
 
 	body, _ := json.Marshal(map[string]any{
 		"script_id": scriptID, "name": "X",
@@ -203,7 +203,7 @@ func TestScheduleHandler_Create_BothTargets_Integration(t *testing.T) {
 	tenantID := testutil.SeedTenant(t, pool, "Schedule Both Targets Corp", 10)
 	userID := testutil.SeedUser(t, pool, tenantID, "sched-bothtargets@example.com")
 	scriptID := seedScript(t, pool, tenantID, userID)
-	h := NewScheduleHandler(pool)
+	h := NewScheduleHandler(pool, nil)
 
 	body, _ := json.Marshal(map[string]any{
 		"script_id": scriptID, "name": "X",
@@ -228,7 +228,7 @@ func TestScheduleHandler_Update_Integration(t *testing.T) {
 	userID := testutil.SeedUser(t, pool, tenantID, "sched-update@example.com")
 	scriptID := seedScript(t, pool, tenantID, userID)
 	agentID := testutil.SeedAgent(t, pool, tenantID, "sched-update-agent")
-	h := NewScheduleHandler(pool)
+	h := NewScheduleHandler(pool, nil)
 
 	createBody, _ := json.Marshal(map[string]any{
 		"script_id": scriptID, "name": "Initiale",
@@ -280,7 +280,7 @@ func TestScheduleHandler_Delete_Integration(t *testing.T) {
 	userID := testutil.SeedUser(t, pool, tenantID, "sched-delete@example.com")
 	scriptID := seedScript(t, pool, tenantID, userID)
 	agentID := testutil.SeedAgent(t, pool, tenantID, "sched-delete-agent")
-	h := NewScheduleHandler(pool)
+	h := NewScheduleHandler(pool, nil)
 
 	createBody, _ := json.Marshal(map[string]any{
 		"script_id": scriptID, "name": "À supprimer",

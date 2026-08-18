@@ -20,7 +20,7 @@ import (
 func TestEnrollmentHandler_Create_Integration(t *testing.T) {
 	pool := testutil.TestDB(t)
 	tenantID := testutil.SeedTenant(t, pool, "Create Corp", 10)
-	h := NewEnrollmentHandler(pool)
+	h := NewEnrollmentHandler(pool, nil)
 
 	body := bytes.NewBufferString(`{"label":"srv-01","expires_in_hours":48}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/enrollment-tokens", body)
@@ -61,7 +61,7 @@ func TestEnrollmentHandler_Create_Integration(t *testing.T) {
 func TestEnrollmentHandler_Create_DefaultTTL_Integration(t *testing.T) {
 	pool := testutil.TestDB(t)
 	tenantID := testutil.SeedTenant(t, pool, "Default TTL Corp", 10)
-	h := NewEnrollmentHandler(pool)
+	h := NewEnrollmentHandler(pool, nil)
 
 	// Corps vide : les valeurs par défaut (24h, pas de label) doivent s'appliquer.
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/enrollment-tokens", nil)
@@ -96,7 +96,7 @@ func TestEnrollmentHandler_List_Integration(t *testing.T) {
 	pool := testutil.TestDB(t)
 	tenantA := testutil.SeedTenant(t, pool, "List Corp A", 10)
 	tenantB := testutil.SeedTenant(t, pool, "List Corp B", 10)
-	h := NewEnrollmentHandler(pool)
+	h := NewEnrollmentHandler(pool, nil)
 
 	createFor := func(tenantID, label string) {
 		body := bytes.NewBufferString(`{"label":"` + label + `"}`)
@@ -141,7 +141,7 @@ func TestEnrollmentHandler_List_Integration(t *testing.T) {
 func TestEnrollmentHandler_Delete_Integration(t *testing.T) {
 	pool := testutil.TestDB(t)
 	tenantID := testutil.SeedTenant(t, pool, "Delete Corp", 10)
-	h := NewEnrollmentHandler(pool)
+	h := NewEnrollmentHandler(pool, nil)
 
 	// Crée un token puis récupère son id via List (pas renvoyé par Create tel quel côté "id" seul, mais on le lit en base directement pour simplicité).
 	body := bytes.NewBufferString(`{"label":"to-delete"}`)

@@ -382,6 +382,20 @@ package http
 //         Resp 200: {"data":{Tenant}}
 //
 // ─────────────────────────────────────────────────────────────────────────────
+// JOURNAL D'AUDIT  [JWT requis — réservé aux administrateurs]
+// ─────────────────────────────────────────────────────────────────────────────
+//
+//  GET    /api/v1/audit-log
+//         Auth    : administrateur (claim is_admin du JWT — voir RequireAdmin ;
+//                   la permission "audit:read" existe dans le catalogue RBAC
+//                   pour le catalogue/futurs rôles personnalisés, mais n'est
+//                   pas encore ce qui gate cette route tant que RequirePermission
+//                   reste un stub, voir son commentaire dans middleware.go)
+//         Query   : ?user_id=&action=&resource_type=&from=&to=&cursor=&limit=
+//                   from/to au format RFC3339 (ex: 2024-01-01T00:00:00Z)
+//         Resp 200: {"data":[{AuditLogEntry}],"meta":{"cursor":"..."}}
+//
+// ─────────────────────────────────────────────────────────────────────────────
 // TABLEAU DE BORD  [JWT requis — aggregats pour la page d'accueil]
 // ─────────────────────────────────────────────────────────────────────────────
 //
@@ -543,6 +557,9 @@ func NewRouter(deps *Dependencies) http.Handler {
 			// Tenant
 			r.Get("/tenant", RequirePermission("tenant", "read")(deps.TenantHandler.Get))
 			r.Patch("/tenant", RequirePermission("tenant", "write")(deps.TenantHandler.Update))
+
+			// Journal d'audit — administrateurs uniquement (voir RequireAdmin)
+			r.Get("/audit-log", RequireAdmin(deps.AuditHandler.List))
 		})
 	})
 

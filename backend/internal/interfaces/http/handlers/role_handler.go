@@ -20,12 +20,13 @@ import (
 // Delete — les rôles système, is_system=true, ne sont ni modifiables ni
 // supprimables).
 type RoleHandler struct {
-	pool *pgxpool.Pool
+	pool  *pgxpool.Pool
+	audit *AuditLogger
 }
 
-// NewRoleHandler crée un RoleHandler avec le pool de connexions fourni.
-func NewRoleHandler(pool *pgxpool.Pool) *RoleHandler {
-	return &RoleHandler{pool: pool}
+// NewRoleHandler crée un RoleHandler avec ses dépendances.
+func NewRoleHandler(pool *pgxpool.Pool, audit *AuditLogger) *RoleHandler {
+	return &RoleHandler{pool: pool, audit: audit}
 }
 
 type permissionRow struct {
@@ -264,6 +265,7 @@ func (h *RoleHandler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	h.audit.Record(r.Context(), "role.create", "role", roleID, req)
 	h.respondRole(w, r, http.StatusCreated, roleID)
 }
 
@@ -342,6 +344,7 @@ func (h *RoleHandler) Update(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	h.audit.Record(r.Context(), "role.update", "role", roleID, req)
 	h.respondRole(w, r, http.StatusOK, roleID)
 }
 
@@ -376,5 +379,6 @@ func (h *RoleHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.audit.Record(r.Context(), "role.delete", "role", roleID, nil)
 	w.WriteHeader(http.StatusNoContent)
 }

@@ -20,12 +20,13 @@ import (
 // d'enrollment (POST /api/v1/enrollment-tokens et associés) — consommés une
 // seule fois par AgentHandler.Enroll pour provisionner un nouvel agent.
 type EnrollmentHandler struct {
-	pool *pgxpool.Pool
+	pool  *pgxpool.Pool
+	audit *AuditLogger
 }
 
 // NewEnrollmentHandler crée un EnrollmentHandler avec ses dépendances.
-func NewEnrollmentHandler(pool *pgxpool.Pool) *EnrollmentHandler {
-	return &EnrollmentHandler{pool: pool}
+func NewEnrollmentHandler(pool *pgxpool.Pool, audit *AuditLogger) *EnrollmentHandler {
+	return &EnrollmentHandler{pool: pool, audit: audit}
 }
 
 type createEnrollmentTokenRequest struct {
@@ -85,6 +86,10 @@ func (h *EnrollmentHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Le token brut n'est jamais inclus dans les détails d'audit — seul son
+	// hash est persisté en BDD (voir plus haut), pour la même raison.
+	h.audit.Record(r.Context(), "enrollment_token.create", "enrollment_token", id,
+		map[string]any{"label": req.Label, "expires_in_hours": ttlHours, "workspace_id": workspaceID})
 	response.JSON(w, http.StatusCreated, map[string]any{
 		"id":         id,
 		"token":      token,
@@ -151,6 +156,7 @@ func (h *EnrollmentHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.audit.Record(r.Context(), "enrollment_token.delete", "enrollment_token", tokenID, nil)
 	w.WriteHeader(http.StatusNoContent)
 }
 

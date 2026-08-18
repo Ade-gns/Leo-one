@@ -13,12 +13,13 @@ import (
 
 // AlertHandler gère les requêtes HTTP pour les alertes et règles d'alerte.
 type AlertHandler struct {
-	repo alertDomain.Repository
+	repo  alertDomain.Repository
+	audit *AuditLogger
 }
 
 // NewAlertHandler crée un AlertHandler avec ses dépendances.
-func NewAlertHandler(repo alertDomain.Repository) *AlertHandler {
-	return &AlertHandler{repo: repo}
+func NewAlertHandler(repo alertDomain.Repository, audit *AuditLogger) *AlertHandler {
+	return &AlertHandler{repo: repo, audit: audit}
 }
 
 // List retourne la liste paginée des alertes du tenant.
@@ -106,6 +107,7 @@ func (h *AlertHandler) Acknowledge(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.audit.Record(r.Context(), "alert.acknowledge", "alert", alertID, nil)
 	response.JSON(w, http.StatusOK, alert)
 }
 
