@@ -30,6 +30,12 @@ type Dependencies struct {
 	AuditHandler      *handlers.AuditHandler
 	PatchHandler      *handlers.PatchHandler
 	FileHandler       *handlers.FileHandler
+	DocsHandler       *handlers.DocsHandler // nil si EnableAPIDocs est false
+
+	// Documentation API interactive (voir DocsHandler) — désactivée par défaut
+	// en production (cfg.EnableAPIDocs), routes /docs et /docs/openapi.yaml
+	// non enregistrées si false.
+	EnableAPIDocs bool
 
 	// Infrastructure
 	JWTVerifier     *pkgauth.JWTVerifier

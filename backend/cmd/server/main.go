@@ -162,6 +162,7 @@ func main() {
 	patchHandler := handlers.NewPatchHandler(patchRepo, agentRepo, agentHandler, pool, auditLogger)
 	fileHandler := handlers.NewFileHandler(fileRepo, agentRepo, agentHandler,
 		cfg.FileStorageDir, cfg.FileDownloadTTL, cfg.PublicAPIEndpoint(), cfg.FileMaxUploadBytes, auditLogger)
+	docsHandler := handlers.NewDocsHandler(cfg.OpenAPISpecPath)
 
 	// Routeur API REST (Chi)
 	deps := &chiRouter.Dependencies{
@@ -181,6 +182,8 @@ func main() {
 		AuditHandler:      auditHandler,
 		PatchHandler:      patchHandler,
 		FileHandler:       fileHandler,
+		DocsHandler:       docsHandler,
+		EnableAPIDocs:     cfg.EnableAPIDocs,
 		JWTVerifier:       jwtVerifier,
 		TenantRepo:        tenantRepo,
 		AuditLogger:       auditLogger,

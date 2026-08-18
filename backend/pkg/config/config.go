@@ -60,6 +60,13 @@ type Config struct {
 	FileStorageDir     string        // répertoire de stockage des fichiers uploadés
 	FileDownloadTTL    time.Duration // durée de vie du token de téléchargement signé (voir deploy-file)
 	FileMaxUploadBytes int64         // taille max acceptée par POST /api/v1/files
+
+	// Documentation API interactive (Swagger UI, voir DocsHandler) — routes
+	// GET /docs et /docs/openapi.yaml. Activée par défaut en développement
+	// uniquement ; à activer explicitement (ENABLE_API_DOCS=true) pour
+	// l'exposer ailleurs.
+	EnableAPIDocs   bool
+	OpenAPISpecPath string
 }
 
 // PublicWSEndpoint construit l'URL wss:// que les agents utilisent pour se
@@ -88,8 +95,10 @@ func (c *Config) PublicAPIEndpoint() string {
 // Load lit les variables d'environnement et retourne une Config.
 // Retourne une erreur si une variable obligatoire est manquante.
 func Load() (*Config, error) {
+	env := getEnv("APP_ENV", "development")
+
 	cfg := &Config{
-		Env:     getEnv("APP_ENV", "development"),
+		Env:     env,
 		Version: getEnv("APP_VERSION", "dev"),
 
 		ServerAddr:  getEnv("SERVER_ADDR", "0.0.0.0:8080"),
@@ -128,6 +137,13 @@ func Load() (*Config, error) {
 		FileStorageDir:     getEnv("FILE_STORAGE_DIR", "./data/files"),
 		FileDownloadTTL:    getEnvDuration("FILE_DOWNLOAD_TTL", 2*time.Hour),
 		FileMaxUploadBytes: int64(getEnvInt("FILE_MAX_UPLOAD_MB", 512)) * 1024 * 1024,
+
+		// Défaut activé seulement en dev (voir env ci-dessus) — jamais en
+		// production sauf ENABLE_API_DOCS=true explicite.
+		EnableAPIDocs: getEnvBool("ENABLE_API_DOCS", env == "development"),
+		// Chemin relatif : fonctionne depuis backend/ (go run ./cmd/server,
+		// voir scripts/dev.sh) où docs/ est le répertoire parent immédiat.
+		OpenAPISpecPath: getEnv("OPENAPI_SPEC_PATH", "../docs/openapi.yaml"),
 	}
 
 	// Variables obligatoires
@@ -173,6 +189,15 @@ func getEnvDuration(key string, fallback time.Duration) time.Duration {
 	if v := os.Getenv(key); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
 			return d
+		}
+	}
+	return fallback
+}
+
+func getEnvBool(key string, fallback bool) bool {
+	if v := os.Getenv(key); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			return b
 		}
 	}
 	return fallback

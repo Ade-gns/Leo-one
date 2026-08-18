@@ -37,6 +37,11 @@ package http
 //  GET    /health
 //         Resp 200: {"status":"ok","version":"1.0.0","db":"ok"}
 //
+//  GET    /docs                  (dev uniquement, voir EnableAPIDocs)
+//         Page Swagger UI, non protégée par JWT.
+//  GET    /docs/openapi.yaml     (dev uniquement, voir EnableAPIDocs)
+//         Spécification OpenAPI 3.0.3 brute (docs/openapi.yaml).
+//
 //  GET    /api/v1/files/:file_id/download?token=...
 //         Protégée par un token signé à usage unique (voir FICHIERS plus
 //         bas, section deploy-file) — jamais par un JWT, l'agent n'en a pas.
@@ -537,6 +542,14 @@ func NewRouter(deps *Dependencies) http.Handler {
 
 	// ── Routes publiques ──────────────────────────────────────────────────────
 	r.Get("/health", deps.AuthHandler.Health)
+
+	// Documentation API interactive (Swagger UI) — dev uniquement par défaut,
+	// voir Dependencies.EnableAPIDocs / cfg.ENABLE_API_DOCS. Pas de JWT :
+	// ces routes doivent être accessibles depuis un navigateur sans jeton.
+	if deps.EnableAPIDocs && deps.DocsHandler != nil {
+		r.Get("/docs", deps.DocsHandler.UI)
+		r.Get("/docs/openapi.yaml", deps.DocsHandler.Spec)
+	}
 
 	r.Route("/api/v1", func(r chi.Router) {
 		// Enrollment et auth : pas de JWT — rate limitées par IP (voir

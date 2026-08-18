@@ -1,0 +1,1724 @@
+openapi: 3.0.3
+info:
+  title: Leo-One RMM API
+  version: "1.0.0"
+  description: |
+    API REST de Leo-One, outil de supervision et gestion à distance de parc
+    informatique (RMM). Cette spécification reprend, sans les inventer, les
+    routes déjà documentées en commentaires en tête de
+    `backend/internal/interfaces/http/router.go` — en cas de divergence,
+    ce fichier ci est la source secondaire, router.go reste la référence.
+
+    ## Conventions
+
+    - Toutes les routes REST sont préfixées `/api/v1`, sauf `/health` et
+      `/ws/agent` (connexion WebSocket des agents, hors du périmètre REST
+      décrit ici).
+    - Authentification : JWT Bearer (HS256) sur toutes les routes sauf
+      `/auth/login`, `/auth/refresh`, `/auth/logout`, `/enroll`, `/health`
+      et `/files/{fileId}/download` (token signé à usage unique, pas de JWT
+      — l'agent n'en a pas).
+    - `tenant_id` est extrait du JWT, jamais passé dans l'URL ni le corps :
+      l'isolation multi-tenant est garantie côté serveur.
+    - Format de réponse succès : `{"data": ..., "meta"?: {...}}`
+    - Format de réponse erreur : `{"error": {"code": "...", "message": "..."}}`
+    - Pagination cursor-based sur les listes volumineuses : `?cursor=&limit=`
+      (défaut `limit=50`, max `200`), curseur retourné dans `meta.cursor`.
+  contact:
+    name: Leo-One
+servers:
+  - url: http://localhost:8080
+    description: Développement local (voir scripts/dev.sh)
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: Auth
+    description: Connexion, rafraîchissement de session, déconnexion
+  - name: Enrollment
+    description: Inscription initiale d'un agent auprès du backend
+  - name: Agents
+    description: Machines supervisées (CRUD, révocation de certificat, réveil)
+  - name: Commandes
+    description: Exécution de commandes sur un agent, seul ou en masse
+  - name: Métriques
+    description: Séries temporelles CPU/RAM/disque/réseau (TimescaleDB)
+  - name: Inventaire
+    description: Inventaire matériel et logiciel remonté par l'agent
+  - name: Patchs
+    description: Gestion des mises à jour système (patch management)
+  - name: Fichiers
+    description: Bibliothèque de fichiers déployables et leur transfert vers un agent
+  - name: Alertes
+    description: Alertes déclenchées et règles d'alerte
+  - name: Workspaces
+    description: Regroupement d'agents (site, département, client)
+  - name: Tokens d'enrollment
+    description: Jetons à usage unique utilisés pour l'inscription d'un agent
+  - name: Utilisateurs
+    description: Comptes utilisateurs du tenant et MFA
+  - name: Rôles
+    description: Rôles RBAC personnalisés et catalogue de permissions
+  - name: Scripts
+    description: Bibliothèque de scripts réutilisables
+  - name: Planifications
+    description: Planification récurrente (cron) ou ponctuelle de scripts
+  - name: Tenant
+    description: Paramètres du compte/tenant courant
+  - name: Audit
+    description: Journal d'audit des actions d'écriture (réservé aux administrateurs)
+  - name: Dashboard
+    description: Agrégats pour la page d'accueil
+
+paths:
+  # ─────────────────────────────────────────────────────────────────────
+  # Système / santé
+  # ─────────────────────────────────────────────────────────────────────
+  /health:
+    get:
+      tags: [Auth]
+      summary: État de santé du serveur
+      security: []
+      responses:
+        "200":
+          description: Serveur opérationnel
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:  { type: string, example: ok }
+                  version: { type: string, example: "1.0.0" }
+                  db:      { type: string, example: ok }
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Auth
+  # ─────────────────────────────────────────────────────────────────────
+  /api/v1/auth/login:
+    post:
+      tags: [Auth]
+      summary: Authentification (email + mot de passe, MFA optionnel)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:    { type: string, format: email }
+                password: { type: string, format: password }
+                mfa_code: { type: string, example: "123456" }
+      responses:
+        "200":
+          description: Authentification réussie
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      access_token:  { type: string }
+                      refresh_token: { type: string }
+                      expires_in:    { type: integer, example: 900 }
+                      user:          { $ref: "#/components/schemas/User" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { description: Compte désactivé, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/v1/auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Renouvelle un access token à partir d'un refresh token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refresh_token]
+              properties:
+                refresh_token: { type: string }
+      responses:
+        "200":
+          description: Nouveau access token
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      access_token: { type: string }
+                      expires_in:   { type: integer, example: 900 }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /api/v1/auth/logout:
+    post:
+      tags: [Auth]
+      summary: Invalide un refresh token côté serveur
+      security: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                refresh_token: { type: string }
+      responses:
+        "204": { description: Déconnecté }
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Enrollment
+  # ─────────────────────────────────────────────────────────────────────
+  /api/v1/enroll:
+    post:
+      tags: [Enrollment]
+      summary: Enrôle un nouvel agent à partir d'un token d'enrollment
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [enrollment_token, hostname, os, os_version, arch, hardware_id, agent_version]
+              properties:
+                enrollment_token: { type: string }
+                public_key:       { type: string }
+                hostname:         { type: string, example: DESKTOP-ABC123 }
+                os:               { type: string, enum: [windows, linux, macos] }
+                os_version:       { type: string, example: "Windows 11 23H2" }
+                arch:             { type: string, example: amd64 }
+                hardware_id:      { type: string, format: uuid }
+                agent_version:    { type: string, example: "1.0.0" }
+                fqdn:             { type: string }
+      responses:
+        "201":
+          description: Agent créé, certificat mTLS émis
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      agent_id:                { type: string, format: uuid }
+                      tenant_id:                { type: string, format: uuid }
+                      ws_endpoint:              { type: string, example: "wss://rmm.example.com/ws/agent" }
+                      client_cert_pem:          { type: string }
+                      client_key_pem:           { type: string }
+                      server_cert_fingerprint:  { type: string }
+        "400": { $ref: "#/components/responses/ValidationError" }
+        "401": { description: "Token invalide, expiré ou déjà utilisé", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Agents
+  # ─────────────────────────────────────────────────────────────────────
+  /api/v1/agents:
+    get:
+      tags: [Agents]
+      summary: Liste paginée des agents du tenant
+      parameters:
+        - { name: workspace_id, in: query, schema: { type: string, format: uuid } }
+        - { name: status, in: query, schema: { $ref: "#/components/schemas/AgentStatus" } }
+        - { $ref: "#/components/parameters/Cursor" }
+        - { $ref: "#/components/parameters/Limit" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/Agent" } }
+                  meta:
+                    type: object
+                    properties:
+                      cursor: { type: string }
+                      total:  { type: integer }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/v1/agents/{agentId}:
+    parameters:
+      - { $ref: "#/components/parameters/AgentId" }
+    get:
+      tags: [Agents]
+      summary: Détail d'un agent
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/Agent" } } } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [Agents]
+      summary: Met à jour partiellement un agent
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                workspace_id: { type: string, format: uuid, nullable: true }
+                hostname:     { type: string }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/Agent" } } } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [Agents]
+      summary: Supprime un agent (révoque son certificat)
+      responses:
+        "204": { description: Agent supprimé }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/agents/{agentId}/certificate:
+    parameters:
+      - { $ref: "#/components/parameters/AgentId" }
+    delete:
+      tags: [Agents]
+      summary: Révoque le(s) certificat(s) mTLS actif(s) sans supprimer l'agent
+      description: |
+        Coupe aussi toute connexion WSS en cours. Un nouvel enrollment est
+        requis ensuite pour que l'agent se reconnecte.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      revoked_count: { type: integer, example: 1 }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/agents/{agentId}/wake-up:
+    parameters:
+      - { $ref: "#/components/parameters/AgentId" }
+    post:
+      tags: [Agents]
+      summary: Envoie un signal de réveil immédiat à l'agent (FORCE_HEARTBEAT)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      status:  { type: string, example: sent }
+                      message: { type: string }
+                      online:  { type: boolean }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Commandes
+  # ─────────────────────────────────────────────────────────────────────
+  /api/v1/agents/{agentId}/commands:
+    parameters:
+      - { $ref: "#/components/parameters/AgentId" }
+    get:
+      tags: [Commandes]
+      summary: Historique des commandes d'un agent
+      parameters:
+        - { name: status, in: query, schema: { type: string } }
+        - { $ref: "#/components/parameters/Cursor" }
+        - { $ref: "#/components/parameters/Limit" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/Command" } }
+                  meta: { type: object }
+    post:
+      tags: [Commandes]
+      summary: Crée et envoie une commande à un agent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateCommandRequest" }
+      responses:
+        "202":
+          description: Commande acceptée
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      command_id: { type: string, format: uuid }
+                      status:     { type: string, example: pending }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { description: "Agent hors ligne, commande non envoyée", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+
+  /api/v1/agents/{agentId}/commands/{commandId}:
+    parameters:
+      - { $ref: "#/components/parameters/AgentId" }
+      - { name: commandId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Commandes]
+      summary: Détail d'une commande (inclut stdout/stderr/exit_code/progress_percent)
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/Command" } } } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/agents/bulk-commands:
+    post:
+      tags: [Commandes]
+      summary: Envoie la même commande à plusieurs agents ou un workspace entier
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - { $ref: "#/components/schemas/BulkTarget" }
+                - { $ref: "#/components/schemas/CreateCommandRequest" }
+      responses:
+        "202":
+          description: Résultats par agent cible
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/BulkCommandResult" } }
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Métriques
+  # ─────────────────────────────────────────────────────────────────────
+  /api/v1/agents/{agentId}/metrics:
+    parameters:
+      - { $ref: "#/components/parameters/AgentId" }
+    get:
+      tags: [Métriques]
+      summary: Série temporelle d'un type de métrique, résolution auto (brute/1h/1d)
+      parameters:
+        - { name: type, in: query, required: true, schema: { $ref: "#/components/schemas/MetricType" } }
+        - { name: from, in: query, required: true, schema: { type: string, format: date-time } }
+        - { name: to,   in: query, required: true, schema: { type: string, format: date-time } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/MetricQueryResult" } }
+                  meta:
+                    type: object
+                    properties:
+                      resolution: { type: string, enum: [raw, 1h, 1d] }
+                      from:       { type: string, format: date-time }
+                      to:         { type: string, format: date-time }
+
+  /api/v1/agents/{agentId}/metrics/latest:
+    parameters:
+      - { $ref: "#/components/parameters/AgentId" }
+    get:
+      tags: [Métriques]
+      summary: Dernier snapshot de métriques connu pour un agent
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    additionalProperties: true
+                    example:
+                      cpu_percent: 45.2
+                      ram_used_bytes: 4294967296
+                      ts: "2024-01-01T00:00:00Z"
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Inventaire
+  # ─────────────────────────────────────────────────────────────────────
+  /api/v1/agents/{agentId}/inventory/hardware:
+    parameters:
+      - { $ref: "#/components/parameters/AgentId" }
+    get:
+      tags: [Inventaire]
+      summary: Dernier inventaire matériel connu
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/HardwareInventory" } } } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/agents/{agentId}/inventory/software:
+    parameters:
+      - { $ref: "#/components/parameters/AgentId" }
+    get:
+      tags: [Inventaire]
+      summary: Logiciels installés (filtrable par nom)
+      parameters:
+        - { name: search, in: query, schema: { type: string } }
+        - { $ref: "#/components/parameters/Cursor" }
+        - { $ref: "#/components/parameters/Limit" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/SoftwareItem" } }
+                  meta: { type: object }
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Patchs
+  # ─────────────────────────────────────────────────────────────────────
+  /api/v1/agents/{agentId}/patches:
+    parameters:
+      - { $ref: "#/components/parameters/AgentId" }
+    get:
+      tags: [Patchs]
+      summary: Liste paginée des patchs connus pour un agent
+      parameters:
+        - { name: status, in: query, schema: { $ref: "#/components/schemas/PatchStatus" } }
+        - { $ref: "#/components/parameters/Cursor" }
+        - { $ref: "#/components/parameters/Limit" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/Patch" } }
+                  meta:
+                    type: object
+                    properties:
+                      cursor: { type: string }
+
+  /api/v1/agents/{agentId}/patches/install:
+    parameters:
+      - { $ref: "#/components/parameters/AgentId" }
+    post:
+      tags: [Patchs]
+      summary: Installe une sélection de patchs sur un agent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [patch_ids]
+              properties:
+                patch_ids:    { type: array, items: { type: string }, example: ["KB5031354"] }
+                reboot_after: { type: boolean, default: false }
+      responses:
+        "202": { $ref: "#/components/responses/CommandAccepted" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/agents/bulk-patches/install:
+    post:
+      tags: [Patchs]
+      summary: Installe les patchs disponibles (>= min_severity) sur plusieurs agents ou un workspace
+      description: |
+        Contrairement à `bulk-commands`, la sélection de patchs n'est PAS
+        partagée entre agents : chaque agent cible reçoit ses propres
+        patchs disponibles (>= `min_severity`), les identifiants de patch
+        étant spécifiques à l'inventaire de chaque machine.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - { $ref: "#/components/schemas/BulkTarget" }
+                - type: object
+                  properties:
+                    min_severity: { $ref: "#/components/schemas/PatchSeverity" }
+                    reboot_after: { type: boolean, default: false }
+      responses:
+        "202":
+          description: Résultats par agent cible
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/BulkCommandResult" } }
+
+  /api/v1/patches/summary:
+    get:
+      tags: [Patchs]
+      summary: Vue d'ensemble des patchs en attente pour le tenant (widget dashboard)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/PatchesSummary" }
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Fichiers
+  # ─────────────────────────────────────────────────────────────────────
+  /api/v1/files:
+    get:
+      tags: [Fichiers]
+      summary: Liste la bibliothèque de fichiers déployables du tenant
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/DeployableFile" } }
+    post:
+      tags: [Fichiers]
+      summary: Uploade un nouveau fichier dans la bibliothèque
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+                name: { type: string, description: "Nom dans la bibliothèque (défaut : nom du fichier uploadé)" }
+      responses:
+        "201":
+          description: Fichier créé (checksum SHA-256 calculé côté serveur)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/DeployableFile" }
+        "409": { description: Un fichier de ce nom existe déjà, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+
+  /api/v1/files/{fileId}:
+    parameters:
+      - { name: fileId, in: path, required: true, schema: { type: string, format: uuid } }
+    delete:
+      tags: [Fichiers]
+      summary: Supprime un fichier de la bibliothèque (métadonnées + contenu disque)
+      responses:
+        "204": { description: Supprimé }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/files/{fileId}/download:
+    parameters:
+      - { name: fileId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Fichiers]
+      summary: Télécharge un fichier via un token signé à usage unique
+      description: |
+        Route PUBLIQUE (pas de JWT — l'agent n'en a pas), protégée
+        uniquement par le token signé généré par `deploy-file`, valable une
+        durée limitée et consommé au premier téléchargement.
+      security: []
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Contenu brut du fichier
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        "401": { description: "Token manquant, invalide, expiré ou déjà utilisé", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+
+  /api/v1/agents/{agentId}/deploy-file:
+    parameters:
+      - { $ref: "#/components/parameters/AgentId" }
+    post:
+      tags: [Fichiers]
+      summary: Déploie un fichier de la bibliothèque sur un agent
+      description: |
+        Génère une URL de téléchargement signée à usage unique et envoie
+        une commande `file_transfer` à l'agent. L'avancement du
+        téléchargement est consultable en pollant
+        `GET /agents/{agentId}/commands/{commandId}` (champ
+        `progress_percent`, 0-100).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [file_id]
+              properties:
+                file_id: { type: string, format: uuid }
+      responses:
+        "202": { $ref: "#/components/responses/CommandAccepted" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Alertes
+  # ─────────────────────────────────────────────────────────────────────
+  /api/v1/alerts:
+    get:
+      tags: [Alertes]
+      summary: Liste paginée des alertes du tenant
+      parameters:
+        - { name: status, in: query, schema: { $ref: "#/components/schemas/AlertStatus" } }
+        - { name: severity, in: query, schema: { $ref: "#/components/schemas/AlertSeverity" } }
+        - { name: agent_id, in: query, schema: { type: string, format: uuid } }
+        - { $ref: "#/components/parameters/Cursor" }
+        - { $ref: "#/components/parameters/Limit" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/Alert" } }
+                  meta: { type: object }
+
+  /api/v1/alerts/{alertId}:
+    parameters:
+      - { name: alertId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Alertes]
+      summary: Détail d'une alerte
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/Alert" } } } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/alerts/{alertId}/acknowledge:
+    parameters:
+      - { name: alertId, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [Alertes]
+      summary: Acquitte une alerte
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                comment: { type: string }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/Alert" } } } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/alert-rules:
+    get:
+      tags: [Alertes]
+      summary: Liste des règles d'alerte
+      parameters:
+        - { name: workspace_id, in: query, schema: { type: string, format: uuid } }
+        - { name: is_active, in: query, schema: { type: boolean } }
+        - { $ref: "#/components/parameters/Cursor" }
+        - { $ref: "#/components/parameters/Limit" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/AlertRule" } }
+                  meta: { type: object }
+    post:
+      tags: [Alertes]
+      summary: Crée une règle d'alerte
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateAlertRuleRequest" }
+      responses:
+        "201": { description: Créée, content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/AlertRule" } } } } } }
+
+  /api/v1/alert-rules/{ruleId}:
+    parameters:
+      - { name: ruleId, in: path, required: true, schema: { type: string, format: uuid } }
+    patch:
+      tags: [Alertes]
+      summary: Met à jour partiellement une règle d'alerte
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateAlertRuleRequest" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/AlertRule" } } } } } }
+    delete:
+      tags: [Alertes]
+      summary: Supprime une règle d'alerte
+      responses:
+        "204": { description: Supprimée }
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Workspaces
+  # ─────────────────────────────────────────────────────────────────────
+  /api/v1/workspaces:
+    get:
+      tags: [Workspaces]
+      summary: Liste les workspaces du tenant
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/Workspace" } }
+    post:
+      tags: [Workspaces]
+      summary: Crée un workspace
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:        { type: string, example: Paris }
+                description: { type: string }
+      responses:
+        "201": { description: Créé, content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/Workspace" } } } } } }
+
+  /api/v1/workspaces/{workspaceId}:
+    parameters:
+      - { name: workspaceId, in: path, required: true, schema: { type: string, format: uuid } }
+    patch:
+      tags: [Workspaces]
+      summary: Met à jour un workspace
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:        { type: string }
+                description: { type: string }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/Workspace" } } } } } }
+    delete:
+      tags: [Workspaces]
+      summary: Supprime un workspace (les agents sont détachés, pas supprimés)
+      responses:
+        "204": { description: Supprimé }
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Tokens d'enrollment
+  # ─────────────────────────────────────────────────────────────────────
+  /api/v1/enrollment-tokens:
+    get:
+      tags: [Tokens d'enrollment]
+      summary: Liste les tokens d'enrollment du tenant (sans la valeur brute)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/EnrollmentToken" } }
+    post:
+      tags: [Tokens d'enrollment]
+      summary: Génère un nouveau token d'enrollment
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                label:            { type: string, example: "Déploiement Paris Jan 2025" }
+                workspace_id:     { type: string, format: uuid }
+                expires_in_hours: { type: integer, default: 24 }
+      responses:
+        "201":
+          description: Token créé — la valeur brute n'est affichée qu'ici, une seule fois
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      id:         { type: string, format: uuid }
+                      token:      { type: string, description: "Valeur brute, affichée une seule fois" }
+                      expires_at: { type: string, format: date-time }
+
+  /api/v1/enrollment-tokens/{tokenId}:
+    parameters:
+      - { name: tokenId, in: path, required: true, schema: { type: string, format: uuid } }
+    delete:
+      tags: [Tokens d'enrollment]
+      summary: Révoque un token d'enrollment
+      responses:
+        "204": { description: Révoqué }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Utilisateurs
+  # ─────────────────────────────────────────────────────────────────────
+  /api/v1/users:
+    get:
+      tags: [Utilisateurs]
+      summary: Liste les utilisateurs du tenant
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/User" } }
+    post:
+      tags: [Utilisateurs]
+      summary: Crée un utilisateur
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, full_name, password]
+              properties:
+                email:     { type: string, format: email }
+                full_name: { type: string }
+                password:  { type: string, format: password, minLength: 8 }
+                role_ids:  { type: array, items: { type: string, format: uuid } }
+      responses:
+        "201": { description: Créé, content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/User" } } } } } }
+        "409": { description: Email déjà utilisé, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+
+  /api/v1/users/{userId}:
+    parameters:
+      - { name: userId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Utilisateurs]
+      summary: Détail d'un utilisateur (avec ses rôles)
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/User" } } } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      tags: [Utilisateurs]
+      summary: Met à jour partiellement un utilisateur
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                full_name: { type: string }
+                is_active: { type: boolean }
+                role_ids:  { type: array, items: { type: string, format: uuid } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/User" } } } } } }
+    delete:
+      tags: [Utilisateurs]
+      summary: Supprime un utilisateur
+      responses:
+        "204": { description: Supprimé }
+
+  /api/v1/users/me/mfa/enable:
+    post:
+      tags: [Utilisateurs]
+      summary: Démarre l'activation MFA pour l'utilisateur courant
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      qr_uri: { type: string, example: "otpauth://..." }
+                      secret: { type: string }
+        "501": { description: Non implémenté }
+
+  /api/v1/users/me/mfa/confirm:
+    post:
+      tags: [Utilisateurs]
+      summary: Confirme l'activation MFA avec un code TOTP
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                code: { type: string, example: "123456" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      backup_codes: { type: array, items: { type: string } }
+        "501": { description: Non implémenté }
+
+  /api/v1/users/me/mfa/disable:
+    post:
+      tags: [Utilisateurs]
+      summary: Désactive la MFA pour l'utilisateur courant
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                code: { type: string }
+      responses:
+        "204": { description: Désactivée }
+        "501": { description: Non implémenté }
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Rôles
+  # ─────────────────────────────────────────────────────────────────────
+  /api/v1/roles:
+    get:
+      tags: [Rôles]
+      summary: Liste les rôles du tenant (système + personnalisés), avec permissions
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/Role" } }
+    post:
+      tags: [Rôles]
+      summary: Crée un rôle personnalisé
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:            { type: string, example: Superviseur }
+                description:     { type: string }
+                permission_ids:  { type: array, items: { type: string, format: uuid } }
+      responses:
+        "201": { description: Créé, content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/Role" } } } } } }
+
+  /api/v1/roles/{roleId}:
+    parameters:
+      - { name: roleId, in: path, required: true, schema: { type: string, format: uuid } }
+    patch:
+      tags: [Rôles]
+      summary: Met à jour un rôle personnalisé
+      description: Les rôles système (`is_system=true`) sont immuables → 403 SYSTEM_ROLE_IMMUTABLE.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:           { type: string }
+                description:    { type: string }
+                permission_ids: { type: array, items: { type: string, format: uuid } }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/Role" } } } } } }
+        "403": { description: Rôle système immuable, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+    delete:
+      tags: [Rôles]
+      summary: Supprime un rôle personnalisé
+      responses:
+        "204": { description: Supprimé }
+        "403": { description: Rôle système immuable, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+
+  /api/v1/permissions:
+    get:
+      tags: [Rôles]
+      summary: Catalogue complet des permissions atomiques (resource × action)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/Permission" } }
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Scripts
+  # ─────────────────────────────────────────────────────────────────────
+  /api/v1/scripts:
+    get:
+      tags: [Scripts]
+      summary: Liste la bibliothèque de scripts du tenant
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/Script" } }
+    post:
+      tags: [Scripts]
+      summary: Crée un script
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, interpreter, content]
+              properties:
+                name:        { type: string }
+                description: { type: string }
+                interpreter: { $ref: "#/components/schemas/ScriptInterpreter" }
+                content:     { type: string }
+      responses:
+        "201": { description: Créé, content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/Script" } } } } } }
+        "409": { description: Un script de ce nom existe déjà, content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
+
+  /api/v1/scripts/{scriptId}:
+    parameters:
+      - { name: scriptId, in: path, required: true, schema: { type: string, format: uuid } }
+    patch:
+      tags: [Scripts]
+      summary: Met à jour un script
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:        { type: string }
+                description: { type: string }
+                interpreter: { $ref: "#/components/schemas/ScriptInterpreter" }
+                content:     { type: string }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/Script" } } } } } }
+    delete:
+      tags: [Scripts]
+      summary: Supprime un script (les planifications associées sont supprimées en cascade)
+      responses:
+        "204": { description: Supprimé }
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Planifications de scripts
+  # ─────────────────────────────────────────────────────────────────────
+  /api/v1/script-schedules:
+    get:
+      tags: [Planifications]
+      summary: Liste les planifications du tenant
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/ScriptSchedule" } }
+    post:
+      tags: [Planifications]
+      summary: Crée une planification récurrente (cron) ou ponctuelle (run_at)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateScheduleRequest" }
+      responses:
+        "201": { description: Créée, content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/ScriptSchedule" } } } } } }
+
+  /api/v1/script-schedules/{scheduleId}:
+    parameters:
+      - { name: scheduleId, in: path, required: true, schema: { type: string, format: uuid } }
+    patch:
+      tags: [Planifications]
+      summary: Met à jour une planification (champs partiels, dont `enabled`)
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateScheduleRequest" }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/ScriptSchedule" } } } } } }
+    delete:
+      tags: [Planifications]
+      summary: Supprime une planification
+      responses:
+        "204": { description: Supprimée }
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Tenant
+  # ─────────────────────────────────────────────────────────────────────
+  /api/v1/tenant:
+    get:
+      tags: [Tenant]
+      summary: Paramètres du tenant courant
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    allOf:
+                      - { $ref: "#/components/schemas/Tenant" }
+                      - type: object
+                        properties:
+                          agent_count: { type: integer }
+                          plan_limits: { type: object, additionalProperties: true }
+    patch:
+      tags: [Tenant]
+      summary: Met à jour le tenant (seul le nom est modifiable en self-service)
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+      responses:
+        "200": { description: OK, content: { application/json: { schema: { type: object, properties: { data: { $ref: "#/components/schemas/Tenant" } } } } } }
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Audit
+  # ─────────────────────────────────────────────────────────────────────
+  /api/v1/audit-log:
+    get:
+      tags: [Audit]
+      summary: Journal d'audit du tenant (réservé aux administrateurs)
+      description: |
+        Réservé aux administrateurs (claim `is_admin` du JWT) — voir
+        `RequireAdmin` dans middleware.go. La permission `audit:read`
+        existe dans le catalogue RBAC pour les futurs rôles personnalisés,
+        mais n'est pas encore ce qui gate cette route tant que
+        `RequirePermission` reste un stub.
+      parameters:
+        - { name: user_id, in: query, schema: { type: string, format: uuid } }
+        - { name: action, in: query, schema: { type: string, example: "agent.delete" } }
+        - { name: resource_type, in: query, schema: { type: string, example: agent } }
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+        - { $ref: "#/components/parameters/Cursor" }
+        - { $ref: "#/components/parameters/Limit" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { type: array, items: { $ref: "#/components/schemas/AuditLogEntry" } }
+                  meta:
+                    type: object
+                    properties:
+                      cursor: { type: string }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Dashboard
+  # ─────────────────────────────────────────────────────────────────────
+  /api/v1/dashboard/summary:
+    get:
+      tags: [Dashboard]
+      summary: Agrégats pour la page d'accueil (agents:read + alerts:read)
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/DashboardSummary" }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        Access token obtenu via `POST /api/v1/auth/login` ou
+        `POST /api/v1/auth/refresh`.
+
+  parameters:
+    AgentId:
+      name: agentId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    Cursor:
+      name: cursor
+      in: query
+      description: Curseur de pagination (voir meta.cursor de la page précédente)
+      schema: { type: string }
+    Limit:
+      name: limit
+      in: query
+      description: Nombre d'éléments par page (défaut 50, max 200)
+      schema: { type: integer, default: 50, maximum: 200 }
+
+  responses:
+    Unauthorized:
+      description: JWT manquant ou invalide
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+    Forbidden:
+      description: Permission insuffisante
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+    NotFound:
+      description: Ressource introuvable (ou hors tenant)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+    ValidationError:
+      description: Payload invalide
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+    RateLimited:
+      description: Trop de requêtes (par IP) ou trop d'échecs d'authentification récents (par compte)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
+    CommandAccepted:
+      description: Commande créée et envoyée si l'agent est en ligne
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              data:
+                type: object
+                properties:
+                  command_id: { type: string, format: uuid }
+                  status:     { type: string, example: pending }
+                  sent:       { type: boolean }
+
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              description: |
+                Code d'erreur applicatif stable : UNAUTHORIZED, FORBIDDEN,
+                NOT_FOUND, VALIDATION_ERROR, AGENT_OFFLINE,
+                ENROLLMENT_TOKEN_USED, ENROLLMENT_TOKEN_EXPIRED,
+                MFA_REQUIRED, MFA_INVALID, SYSTEM_ROLE_IMMUTABLE,
+                TENANT_LIMIT_REACHED, RATE_LIMITED, INTERNAL_ERROR, ...
+              example: NOT_FOUND
+            message: { type: string }
+            details:
+              type: object
+              additionalProperties: true
+
+    AgentStatus:
+      type: string
+      enum: [online, offline, maintenance, unresponsive]
+    AgentOS:
+      type: string
+      enum: [windows, linux, macos]
+
+    Agent:
+      type: object
+      properties:
+        id:            { type: string, format: uuid }
+        tenant_id:     { type: string, format: uuid }
+        workspace_id:  { type: string, format: uuid, nullable: true }
+        hostname:      { type: string }
+        fqdn:          { type: string, nullable: true }
+        os:            { $ref: "#/components/schemas/AgentOS" }
+        os_version:    { type: string }
+        arch:          { type: string }
+        hardware_id:   { type: string }
+        ip_address:    { type: string, nullable: true }
+        agent_version: { type: string }
+        status:        { $ref: "#/components/schemas/AgentStatus" }
+        last_seen_at:  { type: string, format: date-time, nullable: true }
+        enrolled_at:   { type: string, format: date-time }
+        created_at:    { type: string, format: date-time }
+        updated_at:    { type: string, format: date-time }
+
+    CreateCommandRequest:
+      type: object
+      required: [type, payload]
+      properties:
+        type:
+          type: string
+          enum: [exec_script, install_pkg, reboot, ping]
+        payload:
+          type: object
+          additionalProperties: true
+          example:
+            interpreter: powershell
+            script: Get-Process
+            timeout_sec: 30
+
+    BulkTarget:
+      type: object
+      description: Exactement l'un des deux champs — agent_ids OU workspace_id
+      properties:
+        agent_ids:    { type: array, items: { type: string, format: uuid } }
+        workspace_id: { type: string, format: uuid, nullable: true }
+
+    Command:
+      type: object
+      properties:
+        id:               { type: string, format: uuid }
+        agent_id:         { type: string, format: uuid }
+        type:
+          type: string
+          enum: [exec_script, install_pkg, reboot, ping, install_patches, file_transfer]
+        payload:          { type: object, additionalProperties: true }
+        status:           { type: string, enum: [pending, running, success, failed, timeout] }
+        stdout:           { type: string, nullable: true }
+        stderr:           { type: string, nullable: true }
+        exit_code:        { type: integer, nullable: true }
+        progress_percent: { type: integer, nullable: true, minimum: 0, maximum: 100, description: "Alimenté pendant un file_transfer" }
+        created_at:       { type: string, format: date-time }
+        sent_at:          { type: string, format: date-time, nullable: true }
+        completed_at:     { type: string, format: date-time, nullable: true }
+
+    BulkCommandResult:
+      type: object
+      properties:
+        agent_id:   { type: string, format: uuid }
+        command_id: { type: string, format: uuid }
+        sent:       { type: boolean }
+        error:      { type: string, nullable: true }
+
+    MetricType:
+      type: string
+      enum:
+        - cpu_percent
+        - ram_used_bytes
+        - ram_total_bytes
+        - disk_used_bytes
+        - disk_total_bytes
+        - net_bytes_in
+        - net_bytes_out
+        - process_count
+
+    MetricQueryResult:
+      type: object
+      properties:
+        time:  { type: string, format: date-time }
+        value: { type: number, format: double }
+        avg:   { type: number, format: double }
+        max:   { type: number, format: double }
+        min:   { type: number, format: double }
+
+    HardwareInventory:
+      type: object
+      properties:
+        id:               { type: string, format: uuid }
+        agent_id:         { type: string, format: uuid }
+        cpu_model:        { type: string, nullable: true }
+        cpu_cores:        { type: integer, nullable: true }
+        cpu_threads:      { type: integer, nullable: true }
+        ram_total_bytes:  { type: integer, format: int64, nullable: true }
+        disk_count:       { type: integer, nullable: true }
+        bios_version:     { type: string, nullable: true }
+        bios_vendor:      { type: string, nullable: true }
+        motherboard:      { type: string, nullable: true }
+        serial_number:    { type: string, nullable: true }
+        collected_at:     { type: string, format: date-time }
+
+    SoftwareItem:
+      type: object
+      properties:
+        id:            { type: string, format: uuid }
+        name:          { type: string }
+        version:       { type: string, nullable: true }
+        publisher:     { type: string, nullable: true }
+        install_date:  { type: string, format: date-time, nullable: true }
+        install_path:  { type: string, nullable: true }
+        collected_at:  { type: string, format: date-time }
+
+    PatchSeverity:
+      type: string
+      enum: [optional, important, critical]
+    PatchStatus:
+      type: string
+      enum: [available, installed, ignored, failed]
+
+    Patch:
+      type: object
+      properties:
+        id:           { type: string, format: uuid }
+        tenant_id:    { type: string, format: uuid }
+        agent_id:     { type: string, format: uuid }
+        native_id:    { type: string, description: "Nom de paquet (Linux) ou identifiant KB (Windows)", example: KB5031354 }
+        title:        { type: string }
+        severity:     { $ref: "#/components/schemas/PatchSeverity" }
+        size_bytes:   { type: integer, format: int64, nullable: true }
+        status:       { $ref: "#/components/schemas/PatchStatus" }
+        detected_at:  { type: string, format: date-time }
+        installed_at: { type: string, format: date-time, nullable: true }
+
+    PatchesSummary:
+      type: object
+      properties:
+        agents_with_critical_pending: { type: integer }
+        agents_with_pending_patches:  { type: integer }
+        total_pending_patches:        { type: integer }
+
+    DeployableFile:
+      type: object
+      properties:
+        id:              { type: string, format: uuid }
+        tenant_id:       { type: string, format: uuid }
+        name:            { type: string }
+        size_bytes:      { type: integer, format: int64 }
+        checksum_sha256: { type: string }
+        uploaded_by:     { type: string, format: uuid, nullable: true }
+        created_at:      { type: string, format: date-time }
+
+    AlertSeverity:
+      type: string
+      enum: [info, warning, critical]
+    AlertStatus:
+      type: string
+      enum: [open, acknowledged, resolved]
+
+    Alert:
+      type: object
+      properties:
+        id:               { type: string, format: uuid }
+        tenant_id:        { type: string, format: uuid }
+        agent_id:         { type: string, format: uuid }
+        agent_hostname:   { type: string }
+        rule_id:          { type: string, format: uuid, nullable: true }
+        severity:         { $ref: "#/components/schemas/AlertSeverity" }
+        status:           { $ref: "#/components/schemas/AlertStatus" }
+        title:            { type: string }
+        description:      { type: string, nullable: true }
+        metric_value:     { type: number, nullable: true }
+        triggered_at:     { type: string, format: date-time }
+        acknowledged_at:  { type: string, format: date-time, nullable: true }
+        acknowledged_by:  { type: string, format: uuid, nullable: true }
+        resolved_at:      { type: string, format: date-time, nullable: true }
+        created_at:       { type: string, format: date-time }
+
+    CreateAlertRuleRequest:
+      type: object
+      properties:
+        name:           { type: string, example: "CPU critique" }
+        metric_type:    { $ref: "#/components/schemas/MetricType" }
+        operator:       { type: string, enum: [">", ">=", "<", "<=", "="] }
+        threshold:      { type: number }
+        duration_secs:  { type: integer }
+        severity:       { $ref: "#/components/schemas/AlertSeverity" }
+        workspace_id:   { type: string, format: uuid, nullable: true }
+        agent_id:       { type: string, format: uuid, nullable: true }
+
+    AlertRule:
+      type: object
+      properties:
+        id:             { type: string, format: uuid }
+        tenant_id:      { type: string, format: uuid }
+        workspace_id:   { type: string, format: uuid, nullable: true }
+        agent_id:       { type: string, format: uuid, nullable: true }
+        name:           { type: string }
+        description:    { type: string, nullable: true }
+        metric_type:    { $ref: "#/components/schemas/MetricType" }
+        operator:       { type: string }
+        threshold:      { type: number }
+        duration_secs:  { type: integer }
+        severity:       { $ref: "#/components/schemas/AlertSeverity" }
+        is_active:      { type: boolean }
+        created_by:     { type: string, format: uuid, nullable: true }
+        created_at:     { type: string, format: date-time }
+        updated_at:     { type: string, format: date-time }
+
+    Workspace:
+      type: object
+      properties:
+        id:          { type: string, format: uuid }
+        tenant_id:   { type: string, format: uuid }
+        name:        { type: string }
+        description: { type: string, nullable: true }
+        created_at:  { type: string, format: date-time }
+        updated_at:  { type: string, format: date-time }
+
+    EnrollmentToken:
+      type: object
+      description: Jamais la valeur brute du token (voir POST, qui l'affiche une seule fois)
+      properties:
+        id:         { type: string, format: uuid }
+        label:      { type: string, nullable: true }
+        expires_at: { type: string, format: date-time }
+        used_at:    { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
+
+    RoleSummary:
+      type: object
+      description: Forme allégée d'un rôle, telle qu'imbriquée dans User.roles
+      properties:
+        id:   { type: string, format: uuid }
+        name: { type: string }
+
+    User:
+      type: object
+      properties:
+        id:             { type: string, format: uuid }
+        tenant_id:      { type: string, format: uuid }
+        email:          { type: string, format: email }
+        full_name:      { type: string }
+        is_active:      { type: boolean }
+        mfa_enabled:    { type: boolean }
+        last_login_at:  { type: string, format: date-time, nullable: true }
+        created_at:     { type: string, format: date-time }
+        updated_at:     { type: string, format: date-time }
+        roles:
+          type: array
+          items: { $ref: "#/components/schemas/RoleSummary" }
+
+    Permission:
+      type: object
+      properties:
+        id:          { type: string, format: uuid }
+        resource:    { type: string, example: agents }
+        action:      { type: string, example: read }
+        description: { type: string, nullable: true }
+
+    Role:
+      type: object
+      description: Forme complète d'un rôle, telle que retournée par GET /roles
+      properties:
+        id:          { type: string, format: uuid }
+        name:        { type: string }
+        description: { type: string, nullable: true }
+        is_system:   { type: boolean }
+        permissions:
+          type: array
+          items: { $ref: "#/components/schemas/Permission" }
+
+    ScriptInterpreter:
+      type: string
+      enum: [bash, sh, python, cmd, powershell]
+
+    Script:
+      type: object
+      properties:
+        id:          { type: string, format: uuid }
+        name:        { type: string }
+        description: { type: string, nullable: true }
+        interpreter: { $ref: "#/components/schemas/ScriptInterpreter" }
+        content:     { type: string }
+        created_at:  { type: string, format: date-time }
+        updated_at:  { type: string, format: date-time }
+
+    CreateScheduleRequest:
+      type: object
+      description: Exactement l'un de agent_id/workspace_id, et exactement l'un de cron_expression/run_at
+      properties:
+        script_id:        { type: string, format: uuid }
+        name:             { type: string, example: "Nettoyage nocturne" }
+        agent_id:         { type: string, format: uuid, nullable: true }
+        workspace_id:     { type: string, format: uuid, nullable: true }
+        cron_expression:  { type: string, example: "0 2 * * *" }
+        run_at:           { type: string, format: date-time, nullable: true }
+        timeout_sec:      { type: integer, default: 60 }
+        enabled:          { type: boolean }
+
+    ScriptSchedule:
+      type: object
+      properties:
+        id:               { type: string, format: uuid }
+        script_id:        { type: string, format: uuid }
+        name:             { type: string }
+        agent_id:         { type: string, format: uuid, nullable: true }
+        workspace_id:     { type: string, format: uuid, nullable: true }
+        cron_expression:  { type: string, nullable: true }
+        run_at:           { type: string, format: date-time, nullable: true }
+        timeout_sec:      { type: integer }
+        enabled:          { type: boolean }
+        next_run_at:      { type: string, format: date-time }
+        last_run_at:      { type: string, format: date-time, nullable: true }
+        created_at:       { type: string, format: date-time }
+        updated_at:       { type: string, format: date-time }
+
+    Tenant:
+      type: object
+      properties:
+        id:         { type: string, format: uuid }
+        name:       { type: string }
+        slug:       { type: string }
+        plan:       { type: string }
+        max_agents: { type: integer }
+        is_active:  { type: boolean }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    AuditLogEntry:
+      type: object
+      properties:
+        id:            { type: string, format: uuid }
+        tenant_id:     { type: string, format: uuid }
+        user_id:       { type: string, format: uuid, nullable: true }
+        action:        { type: string, example: "agent.delete" }
+        resource_type: { type: string, example: agent }
+        resource_id:   { type: string, nullable: true }
+        details:       { type: object, additionalProperties: true, nullable: true }
+        ip_address:    { type: string, nullable: true }
+        created_at:    { type: string, format: date-time }
+
+    DashboardSummary:
+      type: object
+      properties:
+        agents_total:    { type: integer }
+        agents_online:   { type: integer }
+        alerts_open:     { type: integer }
+        alerts_critical: { type: integer }
+        cpu_avg_percent: { type: number }
+        ram_avg_percent: { type: number }
