@@ -217,3 +217,93 @@ func TestRelay_PairTimeout_EndsUnpairedSession(t *testing.T) {
 		t.Fatalf("MarkEnded attendu avec reason=pair_timeout, obtenu (%q, %v)", reason, ok)
 	}
 }
+
+// TestRelay_KeepAlivePersistsBeyondPongWait prouve que le correctif de
+// deadline (émetteur de Ping périodique, voir pingLoop dans relay.go) tient
+// sur la durée, pas seulement au démarrage de la session. Sans émetteur de
+// Ping, la deadline de lecture posée une seule fois par copyOne au début de
+// la session expirerait au bout de pongWait, MÊME avec un flux de frames
+// continu — ReadMessage ne renouvelle jamais la deadline lui-même, seul un
+// Pong reçu (via SetPongHandler) le fait. pongWait/pingPeriod sont
+// raccourcis ici uniquement pour ne pas attendre 45 secondes réelles ; le
+// mécanisme exercé (ping périodique -> pong automatique du pair -> deadline
+// repoussée) est identique à celui de production.
+func TestRelay_KeepAlivePersistsBeyondPongWait(t *testing.T) {
+	repo := newFakeRepo()
+	relay := NewRelay(repo, testLogger())
+	relay.pongWait = 200 * time.Millisecond
+	relay.pingPeriod = 50 * time.Millisecond
+	srv := newTestServer(t, relay)
+
+	agentConn := dialWS(t, srv, "/agent?id=sess-5&agent_id=agent-5&mode=view")
+	viewerConn := dialWS(t, srv, "/viewer?id=sess-5&agent_id=agent-5&mode=view")
+
+	// Un vrai client WS (agent C ou navigateur) lit en continu, ce qui est
+	// ce qui lui permet de répondre automatiquement (au niveau protocole,
+	// géré par gorilla/websocket) aux Ping reçus. Sans ce lecteur en arrière-
+	// plan côté agent, le Pong ne serait jamais émis et le test échouerait
+	// pour une raison indépendante du correctif testé.
+	go func() {
+		for {
+			if _, _, err := agentConn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}()
+
+	// 4.5x pongWait : sans le correctif, la deadline expirerait dès le
+	// premier pongWait écoulé et la connexion serait coupée bien avant la
+	// fin de cet envoi.
+	const sendDuration = 900 * time.Millisecond
+	stopSending := make(chan struct{})
+	sendDone := make(chan struct{})
+	go func() {
+		defer close(sendDone)
+		ticker := time.NewTicker(20 * time.Millisecond)
+		defer ticker.Stop()
+		seq := byte(0)
+		for {
+			select {
+			case <-stopSending:
+				return
+			case <-ticker.C:
+				frame := []byte{wireTypeFrame, seq}
+				if err := agentConn.WriteMessage(websocket.BinaryMessage, frame); err != nil {
+					return
+				}
+				seq++
+			}
+		}
+	}()
+	time.AfterFunc(sendDuration, func() { close(stopSending) })
+	go func() {
+		<-sendDone
+		time.Sleep(100 * time.Millisecond) // laisse les dernières frames en vol arriver côté viewer
+		agentConn.Close()                  // termine promptement le pump plutôt que d'attendre la deadline de lecture
+	}()
+
+	viewerConn.SetReadDeadline(time.Now().Add(sendDuration + 2*time.Second))
+	start := time.Now()
+	received := 0
+	sawFrameAfterMultiplePongWaits := false
+	for {
+		_, _, err := viewerConn.ReadMessage()
+		if err != nil {
+			break
+		}
+		received++
+		if time.Since(start) > 3*relay.pongWait {
+			sawFrameAfterMultiplePongWaits = true
+		}
+	}
+	<-sendDone
+
+	// ~45 frames attendues sur 900ms à un envoi/20ms ; on garde une marge
+	// large pour ne pas rendre le test sensible au timing du CI.
+	if received < 20 {
+		t.Fatalf("trop peu de frames reçues (%d) — la connexion semble avoir été coupée prématurément (le correctif de keepalive ne tiendrait pas)", received)
+	}
+	if !sawFrameAfterMultiplePongWaits {
+		t.Fatalf("aucune frame reçue après 3x pongWait (%v écoulés) — le correctif de deadline ne tient pas dans la durée", 3*relay.pongWait)
+	}
+}

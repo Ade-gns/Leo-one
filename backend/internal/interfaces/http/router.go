@@ -530,11 +530,17 @@ package http
 // ─────────────────────────────────────────────────────────────────────────────
 //
 //  GET    /api/v1/audit-log
-//         Auth    : administrateur (claim is_admin du JWT — voir RequireAdmin ;
-//                   la permission "audit:read" existe dans le catalogue RBAC
-//                   pour le catalogue/futurs rôles personnalisés, mais n'est
-//                   pas encore ce qui gate cette route tant que RequirePermission
-//                   reste un stub, voir son commentaire dans middleware.go)
+//         Auth    : administrateur (claim is_admin du JWT — voir RequireAdmin).
+//                   La permission "audit:read" existe dans le catalogue RBAC
+//                   pour de futurs rôles personnalisés, mais volontairement
+//                   pas utilisée ici : contrairement aux autres ressources,
+//                   l'audit log expose potentiellement les actions de TOUS
+//                   les utilisateurs du tenant, pas seulement celles de
+//                   l'appelant — un choix de politique délibéré de rester
+//                   strictement admin-only (voir le commentaire de
+//                   RequireAdmin dans middleware.go), pas une limitation du
+//                   RBAC lui-même (RequirePermission fait de vraies
+//                   vérifications SQL par utilisateur/tenant/rôle).
 //         Query   : ?user_id=&action=&resource_type=&from=&to=&cursor=&limit=
 //                   from/to au format RFC3339 (ex: 2024-01-01T00:00:00Z)
 //         Resp 200: {"data":[{AuditLogEntry}],"meta":{"cursor":"..."}}

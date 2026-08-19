@@ -73,15 +73,15 @@ const defaultPairTimeout = 30 * time.Second
 
 const (
 	maxRemoteDesktopMessageBytes = 8 << 20
-	remoteDesktopPongWait        = 45 * time.Second
-	// remoteDesktopPingPeriod doit rester nettement inférieur à
-	// remoteDesktopPongWait (idiome standard gorilla/websocket) : c'est le
-	// Pong reçu en réponse à ce Ping qui repousse la deadline de lecture dans
-	// SetPongHandler (voir copyOne) — sans émetteur de Ping, aucun Pong
-	// n'arrive jamais et la deadline, posée une seule fois, finit par expirer
-	// même sur une session saine avec un flux de frames continu (ReadMessage
-	// ne renouvelle pas la deadline lui-même).
-	remoteDesktopPingPeriod = 20 * time.Second
+	defaultPongWait              = 45 * time.Second
+	// defaultPingPeriod doit rester nettement inférieur à defaultPongWait
+	// (idiome standard gorilla/websocket) : c'est le Pong reçu en réponse à
+	// ce Ping qui repousse la deadline de lecture dans SetPongHandler (voir
+	// copyOne) — sans émetteur de Ping, aucun Pong n'arrive jamais et la
+	// deadline, posée une seule fois, finit par expirer même sur une session
+	// saine avec un flux de frames continu (ReadMessage ne renouvelle pas la
+	// deadline lui-même).
+	defaultPingPeriod = 20 * time.Second
 )
 
 // Relay est le registre des sessions de bureau à distance en cours
@@ -94,6 +94,8 @@ type Relay struct {
 	repo        rdDomain.Repository
 	logger      *slog.Logger
 	pairTimeout time.Duration
+	pongWait    time.Duration
+	pingPeriod  time.Duration
 }
 
 type liveSession struct {
@@ -131,6 +133,8 @@ func NewRelay(repo rdDomain.Repository, logger *slog.Logger) *Relay {
 		repo:          repo,
 		logger:        logger,
 		pairTimeout:   defaultPairTimeout,
+		pongWait:      defaultPongWait,
+		pingPeriod:    defaultPingPeriod,
 	}
 }
 
@@ -230,9 +234,9 @@ func (r *Relay) pump(ls *liveSession) {
 	copyOne := func(from, to *websocket.Conn, filterInput bool) {
 		defer func() { done <- struct{}{} }()
 		from.SetReadLimit(maxRemoteDesktopMessageBytes)
-		_ = from.SetReadDeadline(time.Now().Add(remoteDesktopPongWait))
+		_ = from.SetReadDeadline(time.Now().Add(r.pongWait))
 		from.SetPongHandler(func(string) error {
-			return from.SetReadDeadline(time.Now().Add(remoteDesktopPongWait))
+			return from.SetReadDeadline(time.Now().Add(r.pongWait))
 		})
 		for {
 			msgType, payload, err := from.ReadMessage()
@@ -259,7 +263,7 @@ func (r *Relay) pump(ls *liveSession) {
 	// and WriteControl methods can be called concurrently with all other
 	// methods"), pas de section critique supplémentaire nécessaire.
 	pingLoop := func(conn *websocket.Conn) {
-		ticker := time.NewTicker(remoteDesktopPingPeriod)
+		ticker := time.NewTicker(r.pingPeriod)
 		defer ticker.Stop()
 		for {
 			select {
