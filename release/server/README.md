@@ -101,9 +101,9 @@ de passe choisis.
 
 ## Générer un token d'enrollment pour un agent
 
-Une fois connecté : **Machines → Générer un token d'enrollment**. Le token
-est à usage unique et de courte durée — à utiliser immédiatement dans la
-configuration de l'agent (voir `release/windows-client/` ou
+Une fois connecté : **Machines → Enrôler un agent → Générer un token**. Le
+token est à usage unique et de courte durée — à utiliser immédiatement dans
+la configuration de l'agent (voir `release/windows-client/` ou
 `release/linux-client/`).
 
 ## Passer en production
@@ -112,20 +112,34 @@ La configuration ci-dessus est pensée pour un premier déploiement/test :
 
 - **`JWT_SECRET`** (dans `.env`) — à changer obligatoirement, sinon les
   sessions ne sont pas sûres.
+- **`PUBLIC_HOST`** (dans `.env`, défaut `localhost`) — le nom d'hôte ou
+  l'IP réellement joignable par vos agents. Sert à la fois de SAN du
+  certificat mTLS du port 8081 et d'adresse littéralement transmise à
+  chaque agent à l'enrollment (`wss://<PUBLIC_HOST>:8081/ws/agent`) — laissé
+  à `localhost`, aucun agent distant ne pourra jamais se connecter.
 - **Mot de passe PostgreSQL** — `docker-compose.yml` le fixe en dur
   (`leo`/`leo_dev`) pour le confort en développement. Pour le changer,
   éditez le bloc `environment:` du service `postgres` dans
   `docker-compose.yml` **et** mettez à jour `DATABASE_URL` en conséquence
   (dans `.env` et dans le bloc `environment:` du service `backend`).
-- **TLS** — le backend écoute en clair (HTTP/WS) sur 8080/8081 et le
-  frontend sert du HTTP simple sur 5173 ; en production, placez tout ça
-  derrière un reverse proxy (nginx/Caddy/Traefik) qui termine le TLS. C'est
-  important en particulier pour le port 8081 (WSS) : les agents refusent de
-  se connecter en clair (mTLS/pinning de certificat requis côté agent).
-  En mode `APP_ENV=production`, renseignez obligatoirement les URLs externes
-  TLS du proxy : `PUBLIC_API_URL=https://rmm.example.com` et
-  `PUBLIC_VIEWER_WS_URL=wss://rmm.example.com/api/v1/remote-desktop/ws`.
-  Ne publiez jamais les ports internes 8080/8081 directement sur Internet.
+- **TLS — port 8080 (API REST + interface web + WS bureau à distance
+  navigateur)** : écoute en clair, tout comme le frontend sur 5173 — à
+  placer en production derrière un reverse proxy (nginx/Caddy/Traefik) qui
+  termine le TLS. En mode `APP_ENV=production`, renseignez obligatoirement
+  les URLs externes TLS du proxy : `PUBLIC_API_URL=https://rmm.example.com`
+  et `PUBLIC_VIEWER_WS_URL=wss://rmm.example.com/api/v1/remote-desktop/ws`.
+  Ne publiez jamais le port interne 8080 directement sur Internet.
+- **TLS — port 8081 (WebSocket agents)** : **déjà en mTLS**, terminé
+  directement par le processus Go (`ClientAuth: RequireAndVerifyClientCert`
+  contre la CA interne, voir `internal/interfaces/ws.ConfigureMTLS`) — ne
+  PAS le placer derrière un reverse proxy qui termine le TLS : cela
+  présenterait un certificat différent aux agents, qui épinglent
+  l'empreinte SHA-256 exacte du certificat émis par la CA interne (pas de
+  chaîne de confiance classique), et casserait toute connexion agent. Ce
+  port doit rester exposé tel quel (ouvrez-le directement sur le pare-feu
+  vers `PUBLIC_HOST`) ; s'il doit vraiment passer par un proxy (changement
+  de port public, par exemple), utilisez un relais TCP pur (passthrough
+  niveau 4, ex. bloc `stream {}` de nginx) qui ne touche jamais au TLS.
 - **Ne pas exposer directement** le port PostgreSQL (5432) à Internet — il
   n'est utile qu'en local/debug.
 

@@ -68,7 +68,8 @@ du hash de mot de passe argon2id, requêtes SQL exactes) :
 **[`release/server/README.md`](release/server/README.md#créer-le-premier-compte-administrateur)**.
 
 Se connecter ensuite sur `http://<votre-serveur>:5173`, puis **Machines →
-Générer un token d'enrollment** pour préparer l'installation du premier agent.
+Enrôler un agent → Générer un token** pour préparer l'installation du
+premier agent.
 
 Pour un déploiement en production (TLS derrière un reverse proxy, mot de
 passe PostgreSQL, `PUBLIC_API_URL`/`PUBLIC_VIEWER_WS_URL`…), voir la section

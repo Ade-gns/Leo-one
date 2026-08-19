@@ -51,8 +51,8 @@ stderr (visible seulement en mode console, voir étape 4 ; capturé par
 d'être créé à l'avance : l'agent le crée lui-même à l'enrollment.
 
 **2. Générer un token d'enrollment.** Dans l'interface d'administration
-Leo-One (voir `release/server/`) : **Machines → Générer un token
-d'enrollment**. Le token est à usage unique et de courte durée.
+Leo-One (voir `release/server/`) : **Machines → Enrôler un agent → Générer
+un token**. Le token est à usage unique et de courte durée.
 
 **3. Configurer l'enrollment.**
 

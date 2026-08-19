@@ -22,8 +22,8 @@ copy leo-agent.exe C:\ProgramData\LeoOne\leo-agent.exe
 ```
 
 **2. Générer un token d'enrollment.** Dans l'interface d'administration
-Leo-One (voir `release/server/`) : **Machines → Générer un token
-d'enrollment**. Le token est à usage unique et de courte durée.
+Leo-One (voir `release/server/`) : **Machines → Enrôler un agent → Générer
+un token**. Le token est à usage unique et de courte durée.
 
 **3. Configurer l'enrollment.** Copiez `agent_bootstrap.conf.example` vers
 `C:\ProgramData\LeoOne\agent_bootstrap.conf` et éditez-le :
