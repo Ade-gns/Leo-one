@@ -15,9 +15,10 @@ info:
       `/ws/agent` (connexion WebSocket des agents, hors du périmètre REST
       décrit ici).
     - Authentification : JWT Bearer (HS256) sur toutes les routes sauf
-      `/auth/login`, `/auth/refresh`, `/auth/logout`, `/enroll`, `/health`
-      et `/files/{fileId}/download` (token signé à usage unique, pas de JWT
-      — l'agent n'en a pas).
+      `/auth/login`, `/auth/refresh`, `/auth/logout`, `/enroll`, `/health`,
+      `/files/{fileId}/download` et `/remote-desktop/ws` (token signé à
+      usage unique, pas de JWT — l'agent et le navigateur n'en portent pas
+      à ce stade).
     - `tenant_id` est extrait du JWT, jamais passé dans l'URL ni le corps :
       l'isolation multi-tenant est garantie côté serveur.
     - Format de réponse succès : `{"data": ..., "meta"?: {...}}`
@@ -50,6 +51,8 @@ tags:
     description: Gestion des mises à jour système (patch management)
   - name: Fichiers
     description: Bibliothèque de fichiers déployables et leur transfert vers un agent
+  - name: Bureau à distance
+    description: Session de visualisation/contrôle à distance d'un agent (streaming JPEG)
   - name: Alertes
     description: Alertes déclenchées et règles d'alerte
   - name: Workspaces
@@ -678,6 +681,128 @@ paths:
       responses:
         "202": { $ref: "#/components/responses/CommandAccepted" }
         "404": { $ref: "#/components/responses/NotFound" }
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Bureau à distance
+  # ─────────────────────────────────────────────────────────────────────
+  /api/v1/agents/{agentId}/remote-desktop/view-sessions:
+    parameters:
+      - { $ref: "#/components/parameters/AgentId" }
+    post:
+      tags: [Bureau à distance]
+      summary: Ouvre une session de bureau à distance en lecture seule
+      description: |
+        Aucun événement clavier/souris transmis (filtré même si le
+        navigateur en envoyait — voir `Relay.pump`). Envoie une commande
+        `REMOTE_DESKTOP_START` à l'agent sur le canal de contrôle existant ;
+        le flux JPEG lui-même transite par une connexion WebSocket dédiée
+        (`viewer_ws_url`), pas par cette route REST. Une seule session
+        active à la fois par agent.
+      responses:
+        "201":
+          description: Session créée (statut `pending` tant que l'agent et le navigateur ne sont pas tous deux connectés au relais)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      session_id:    { type: string, format: uuid }
+                      mode:          { type: string, example: view }
+                      status:        { type: string, example: pending }
+                      viewer_token:  { type: string, description: "Jeton signé à usage unique, à passer en query string de viewer_ws_url" }
+                      viewer_ws_url: { type: string, example: "ws://localhost:8080/api/v1/remote-desktop/ws?token=..." }
+                      expires_at:    { type: string, format: date-time }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "Agent hors ligne (AGENT_OFFLINE), ou déjà une session active sur cet agent (SESSION_ALREADY_ACTIVE)"
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /api/v1/agents/{agentId}/remote-desktop/control-sessions:
+    parameters:
+      - { $ref: "#/components/parameters/AgentId" }
+    post:
+      tags: [Bureau à distance]
+      summary: Ouvre une session de bureau à distance avec prise de contrôle
+      description: |
+        Identique à `view-sessions` (même forme de réponse, `mode` vaut
+        `control`), mais le navigateur peut transmettre des événements
+        clavier/souris relayés vers l'agent. Nécessite la permission
+        `remote_desktop:execute` (au lieu de `:read` pour une session vue
+        seule).
+      responses:
+        "201":
+          description: Session créée
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      session_id:    { type: string, format: uuid }
+                      mode:          { type: string, example: control }
+                      status:        { type: string, example: pending }
+                      viewer_token:  { type: string }
+                      viewer_ws_url: { type: string }
+                      expires_at:    { type: string, format: date-time }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "Agent hors ligne (AGENT_OFFLINE), ou déjà une session active sur cet agent (SESSION_ALREADY_ACTIVE)"
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+
+  /api/v1/agents/{agentId}/remote-desktop/sessions/{sessionId}:
+    parameters:
+      - { $ref: "#/components/parameters/AgentId" }
+      - { name: sessionId, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Bureau à distance]
+      summary: Consulte l'état d'une session de bureau à distance
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: "#/components/schemas/RemoteDesktopSession" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      tags: [Bureau à distance]
+      summary: Termine une session de bureau à distance
+      description: Ferme les connexions côté relais et notifie l'agent (arrêt explicite demandé par l'opérateur).
+      responses:
+        "204": { description: Session terminée }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/remote-desktop/ws:
+    get:
+      tags: [Bureau à distance]
+      summary: Connexion WebSocket du navigateur au relais de bureau à distance
+      description: |
+        Route PUBLIQUE (pas de JWT), protégée uniquement par `viewer_token`
+        (renvoyé par `view-sessions`/`control-sessions`), à usage unique.
+        Une fois l'upgrade WebSocket effectué et l'agent apparié côté
+        relais, messages binaires : frames JPEG (agent → navigateur),
+        événements souris/clavier (navigateur → agent, mode `control`
+        uniquement — filtrés côté relais en mode `view`).
+      security: []
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "101": { description: "Upgrade WebSocket accepté" }
+        "401": { description: "Token manquant, invalide, expiré ou déjà consommé côté navigateur", content: { application/json: { schema: { $ref: "#/components/schemas/ErrorResponse" } } } }
 
   # ─────────────────────────────────────────────────────────────────────
   # Alertes
@@ -1522,6 +1647,22 @@ components:
         checksum_sha256: { type: string }
         uploaded_by:     { type: string, format: uuid, nullable: true }
         created_at:      { type: string, format: date-time }
+
+    RemoteDesktopSession:
+      type: object
+      properties:
+        id:                  { type: string, format: uuid }
+        tenant_id:           { type: string, format: uuid }
+        agent_id:            { type: string, format: uuid }
+        user_id:             { type: string, format: uuid, nullable: true }
+        mode:                { type: string, enum: [view, control] }
+        status:              { type: string, enum: [pending, active, ended] }
+        expires_at:          { type: string, format: date-time, description: "Fenêtre pendant laquelle agent ET navigateur doivent tous deux se connecter, sans quoi la session expire sans jamais devenir active" }
+        agent_connected_at:  { type: string, format: date-time, nullable: true }
+        viewer_connected_at: { type: string, format: date-time, nullable: true }
+        ended_at:            { type: string, format: date-time, nullable: true }
+        ended_reason:        { type: string, nullable: true, example: pair_timeout }
+        created_at:          { type: string, format: date-time }
 
     AlertSeverity:
       type: string
