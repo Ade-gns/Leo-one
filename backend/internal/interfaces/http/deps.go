@@ -14,23 +14,24 @@ import (
 // Chaque champ correspond à un groupe de routes dans router.go.
 type Dependencies struct {
 	// Handlers métier
-	AuthHandler       *handlers.AuthHandler
-	AgentHandler      *handlers.AgentHandler
-	DashboardHandler  *handlers.DashboardHandler
-	MetricHandler     *handlers.MetricHandler
-	InventoryHandler  *handlers.InventoryHandler
-	AlertHandler      *handlers.AlertHandler
-	WorkspaceHandler  *handlers.WorkspaceHandler
-	UserHandler       *handlers.UserHandler
-	RoleHandler       *handlers.RoleHandler
-	TenantHandler     *handlers.TenantHandler
-	EnrollmentHandler *handlers.EnrollmentHandler
-	ScriptHandler     *handlers.ScriptHandler
-	ScheduleHandler   *handlers.ScheduleHandler
-	AuditHandler      *handlers.AuditHandler
-	PatchHandler      *handlers.PatchHandler
-	FileHandler       *handlers.FileHandler
-	DocsHandler       *handlers.DocsHandler // nil si EnableAPIDocs est false
+	AuthHandler          *handlers.AuthHandler
+	AgentHandler         *handlers.AgentHandler
+	DashboardHandler     *handlers.DashboardHandler
+	MetricHandler        *handlers.MetricHandler
+	InventoryHandler     *handlers.InventoryHandler
+	AlertHandler         *handlers.AlertHandler
+	WorkspaceHandler     *handlers.WorkspaceHandler
+	UserHandler          *handlers.UserHandler
+	RoleHandler          *handlers.RoleHandler
+	TenantHandler        *handlers.TenantHandler
+	EnrollmentHandler    *handlers.EnrollmentHandler
+	ScriptHandler        *handlers.ScriptHandler
+	ScheduleHandler      *handlers.ScheduleHandler
+	AuditHandler         *handlers.AuditHandler
+	PatchHandler         *handlers.PatchHandler
+	FileHandler          *handlers.FileHandler
+	RemoteDesktopHandler *handlers.RemoteDesktopHandler
+	DocsHandler          *handlers.DocsHandler // nil si EnableAPIDocs est false
 
 	// Documentation API interactive (voir DocsHandler) — désactivée par défaut
 	// en production (cfg.EnableAPIDocs), routes /docs et /docs/openapi.yaml

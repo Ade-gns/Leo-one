@@ -23,6 +23,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/yourorg/leo-one/internal/infrastructure/persistence/postgres"
+	"github.com/yourorg/leo-one/internal/infrastructure/remotedesktop"
 	"github.com/yourorg/leo-one/internal/infrastructure/websocket"
 	chiRouter "github.com/yourorg/leo-one/internal/interfaces/http"
 	"github.com/yourorg/leo-one/internal/interfaces/http/handlers"
@@ -128,6 +129,7 @@ func main() {
 	auditRepo := postgres.NewAuditRepo(pool)
 	patchRepo := postgres.NewPatchRepo(pool)
 	fileRepo := postgres.NewFileRepo(pool)
+	remoteDesktopRepo := postgres.NewRemoteDesktopRepo(pool)
 
 	// WebSocket
 	dispatcher := websocket.NewDispatcher(agentRepo, metricRepo, inventoryRepo, patchRepo, pool, log)
@@ -135,6 +137,14 @@ func main() {
 	dispatcher.SetHub(hub)
 
 	agentWSH := wsHandler.NewAgentWSHandler(hub, pool, log)
+
+	// Bureau à distance : relais indépendant du Hub (voir
+	// internal/infrastructure/remotedesktop.Relay pour le pourquoi), câblé
+	// dans le Dispatcher pour que la déconnexion d'un agent termine ses
+	// sessions en cours.
+	remoteDesktopRelay := remotedesktop.NewRelay(remoteDesktopRepo, log)
+	dispatcher.SetRemoteDesktopRelay(remoteDesktopRelay)
+	remoteDesktopWSH := wsHandler.NewRemoteDesktopWSHandler(remoteDesktopRelay, remoteDesktopRepo, pool, log)
 
 	// Auth
 	jwtVerifier := pkgauth.NewJWTVerifier(jwtSecret)
@@ -162,33 +172,36 @@ func main() {
 	patchHandler := handlers.NewPatchHandler(patchRepo, agentRepo, agentHandler, pool, auditLogger)
 	fileHandler := handlers.NewFileHandler(fileRepo, agentRepo, agentHandler,
 		cfg.FileStorageDir, cfg.FileDownloadTTL, cfg.PublicAPIEndpoint(), cfg.FileMaxUploadBytes, auditLogger)
+	remoteDesktopHandler := handlers.NewRemoteDesktopHandler(remoteDesktopRepo, agentRepo, hub, remoteDesktopRelay,
+		cfg.RemoteDesktopSessionTTL, cfg.PublicRemoteDesktopWSEndpoint(), cfg.PublicViewerWSEndpoint(), auditLogger, log)
 	docsHandler := handlers.NewDocsHandler(cfg.OpenAPISpecPath)
 
 	// Routeur API REST (Chi)
 	deps := &chiRouter.Dependencies{
-		AuthHandler:       authHandler,
-		AgentHandler:      agentHandler,
-		DashboardHandler:  dashboardHandler,
-		MetricHandler:     metricHandler,
-		InventoryHandler:  inventoryHandler,
-		AlertHandler:      alertHandler,
-		WorkspaceHandler:  workspaceHandler,
-		UserHandler:       userHandler,
-		RoleHandler:       roleHandler,
-		TenantHandler:     tenantHandler,
-		EnrollmentHandler: enrollmentHandler,
-		ScriptHandler:     scriptHandler,
-		ScheduleHandler:   scheduleHandler,
-		AuditHandler:      auditHandler,
-		PatchHandler:      patchHandler,
-		FileHandler:       fileHandler,
-		DocsHandler:       docsHandler,
-		EnableAPIDocs:     cfg.EnableAPIDocs,
-		JWTVerifier:       jwtVerifier,
-		TenantRepo:        tenantRepo,
-		AuditLogger:       auditLogger,
-		AuthRateLimiter:   authIPLimiter,
-		Logger:            log,
+		AuthHandler:          authHandler,
+		AgentHandler:         agentHandler,
+		DashboardHandler:     dashboardHandler,
+		MetricHandler:        metricHandler,
+		InventoryHandler:     inventoryHandler,
+		AlertHandler:         alertHandler,
+		WorkspaceHandler:     workspaceHandler,
+		UserHandler:          userHandler,
+		RoleHandler:          roleHandler,
+		TenantHandler:        tenantHandler,
+		EnrollmentHandler:    enrollmentHandler,
+		ScriptHandler:        scriptHandler,
+		ScheduleHandler:      scheduleHandler,
+		AuditHandler:         auditHandler,
+		PatchHandler:         patchHandler,
+		FileHandler:          fileHandler,
+		RemoteDesktopHandler: remoteDesktopHandler,
+		DocsHandler:          docsHandler,
+		EnableAPIDocs:        cfg.EnableAPIDocs,
+		JWTVerifier:          jwtVerifier,
+		TenantRepo:           tenantRepo,
+		AuditLogger:          auditLogger,
+		AuthRateLimiter:      authIPLimiter,
+		Logger:               log,
 	}
 	apiRouter := chiRouter.NewRouter(deps)
 
@@ -204,6 +217,7 @@ func main() {
 	// ── Serveur HTTP — WebSocket agents (:8081) ────────────────────────────
 	wsMux := http.NewServeMux()
 	wsMux.Handle("/ws/agent", agentWSH)
+	wsMux.Handle("/ws/remote-desktop", remoteDesktopWSH)
 	wsMux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"status":"ok"}`))

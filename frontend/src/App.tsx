@@ -11,6 +11,7 @@ const LoginPage      = lazy(() => import('@/pages/LoginPage'))
 const DashboardPage  = lazy(() => import('@/pages/DashboardPage'))
 const AgentsPage     = lazy(() => import('@/pages/AgentsPage'))
 const AgentDetailPage = lazy(() => import('@/pages/AgentDetailPage'))
+const RemoteDesktopPage = lazy(() => import('@/pages/RemoteDesktopPage'))
 const AlertsPage     = lazy(() => import('@/pages/AlertsPage'))
 const UsersPage      = lazy(() => import('@/pages/UsersPage'))
 const WorkspacesPage = lazy(() => import('@/pages/WorkspacesPage'))
@@ -57,6 +58,7 @@ export default function App() {
               <Route index                      element={<DashboardPage />}   />
               <Route path="agents"              element={<AgentsPage />}      />
               <Route path="agents/:agentId"     element={<AgentDetailPage />} />
+              <Route path="agents/:agentId/remote-desktop" element={<RemoteDesktopPage />} />
               <Route path="alerts"              element={<AlertsPage />}      />
               <Route path="users"               element={<UsersPage />}       />
               <Route path="workspaces"          element={<WorkspacesPage />}  />

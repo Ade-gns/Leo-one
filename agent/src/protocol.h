@@ -89,6 +89,19 @@ int leo_proto_build_file_transfer_progress(const char *cmd_id,
                                             const char *error_msg,
                                             char *buf, size_t bufsz);
 
+/**
+ * Construit un message REMOTE_DESKTOP_STATUS, envoyé sur le canal de
+ * contrôle (jamais sur la connexion dédiée) pour remonter au backend un
+ * échec ou la fin d'une session de bureau à distance — voir
+ * remote_desktop.h.
+ * @param status     "failed" ou "ended"
+ * @param error_msg  Détail de l'échec (peut être NULL si status == "ended")
+ */
+int leo_proto_build_remote_desktop_status(const char *session_id,
+                                           const char *status,
+                                           const char *error_msg,
+                                           char *buf, size_t bufsz);
+
 /* ─── Désérialisation (backend → agent) ──────────────────────────────────── */
 
 /**

@@ -82,6 +82,16 @@ package http
 //         Resp 401: certificat client manquant ou révoqué
 //         Resp 403: agent inconnu ou tenant désactivé
 //
+//  GET    /ws/remote-desktop?token=...
+//         Upgrade : WebSocket — connexion DÉDIÉE ouverte par l'agent suite à
+//                   une commande LEO_MSG_REMOTE_DESKTOP_START (voir section
+//                   BUREAU À DISTANCE plus bas), séparée de /ws/agent.
+//         Auth    : mTLS (même listener/certificat que /ws/agent) ET jeton
+//                   agent à usage unique en query string — les deux doivent
+//                   désigner le même agent_id.
+//         Resp 401: certificat manquant/révoqué, jeton manquant/invalide/
+//                   expiré/déjà utilisé, ou désaccord jeton/certificat
+//
 // ─────────────────────────────────────────────────────────────────────────────
 // AGENTS  [JWT requis — permission agents:read minimum]
 // ─────────────────────────────────────────────────────────────────────────────
@@ -228,6 +238,50 @@ package http
 //                   (l'agent n'en a pas). Voir ROUTES PUBLIQUES plus haut.
 //         Resp 200: contenu brut du fichier (Content-Disposition: attachment)
 //         Resp 401: token manquant, invalide, expiré, ou déjà utilisé
+//
+// ─────────────────────────────────────────────────────────────────────────────
+// BUREAU À DISTANCE  [JWT requis — permission remote_desktop:read ou :execute]
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Streaming JPEG image par image (pas de vrai codec vidéo/WebRTC) sur une
+// connexion WebSocket DÉDIÉE, séparée du canal de contrôle agent — voir
+// internal/infrastructure/remotedesktop.Relay pour le détail du relais et le
+// pourquoi de cette séparation. Une seule session active à la fois par
+// agent.
+//
+//  POST   /api/v1/agents/:agent_id/remote-desktop/view-sessions
+//         Auth    : remote_desktop:read
+//         Ouvre une session en lecture seule (aucun input transmis, filtré
+//         même si le navigateur en envoyait — voir Relay.pump).
+//         Resp 201: {"data":{"session_id":"...","mode":"view","status":"pending",
+//                     "viewer_token":"...","viewer_ws_url":"ws://.../api/v1/remote-desktop/ws?token=...",
+//                     "expires_at":"..."}}
+//         Resp 404: agent introuvable
+//         Resp 409: agent hors ligne (AGENT_OFFLINE), ou déjà une session
+//                   active sur cet agent (SESSION_ALREADY_ACTIVE)
+//
+//  POST   /api/v1/agents/:agent_id/remote-desktop/control-sessions
+//         Auth    : remote_desktop:execute
+//         Identique à view-sessions, mode="control" : le navigateur peut
+//         transmettre des événements clavier/souris.
+//
+//  GET    /api/v1/agents/:agent_id/remote-desktop/sessions/:session_id
+//         Auth    : remote_desktop:read
+//         Resp 200: {"data":{Session}} — pending|active|ended, raison de fin
+//                   si terminée (ended_reason).
+//
+//  DELETE /api/v1/agents/:agent_id/remote-desktop/sessions/:session_id
+//         Auth    : remote_desktop:read
+//         Termine la session (agent notifié, connexions fermées côté relais).
+//         Resp 204
+//
+//  GET    /api/v1/remote-desktop/ws?token=...
+//         Auth    : AUCUNE (route publique) — jeton signé à usage unique
+//                   renvoyé par view-sessions/control-sessions (viewer_token),
+//                   jamais un JWT. Voir ROUTES PUBLIQUES plus haut.
+//         Upgrade : WebSocket — messages binaires (frame JPEG, input) une
+//                   fois la session appariée côté agent (voir WEBSOCKET —
+//                   Bureau à distance plus bas).
 //
 // ─────────────────────────────────────────────────────────────────────────────
 // MÉTRIQUES  [JWT requis — permission metrics:read]
@@ -568,6 +622,13 @@ func NewRouter(deps *Dependencies) http.Handler {
 		// bruteforçable, contrairement à un mot de passe.
 		r.Get("/files/{fileID}/download", deps.FileHandler.Download)
 
+		// Connexion WebSocket du navigateur pour une session de bureau à
+		// distance : même schéma que le téléchargement de fichier ci-dessus,
+		// jeton signé à usage unique en query string (voir
+		// RemoteDesktopHandler.ServeViewerWS) — pas de JWT, le jeton EST
+		// l'authentification.
+		r.Get("/remote-desktop/ws", deps.RemoteDesktopHandler.ServeViewerWS)
+
 		// ── Routes protégées par JWT ──────────────────────────────────────────
 		r.Group(func(r chi.Router) {
 			r.Use(JWTMiddleware(deps.JWTVerifier))
@@ -601,6 +662,11 @@ func NewRouter(deps *Dependencies) http.Handler {
 				r.Post("/bulk-patches/install", RequirePermission("patches", "execute")(deps.PatchHandler.BulkInstall))
 
 				r.Post("/{agentID}/deploy-file", RequirePermission("files", "execute")(deps.FileHandler.DeployFile))
+
+				r.Post("/{agentID}/remote-desktop/view-sessions", RequirePermission("remote_desktop", "read")(deps.RemoteDesktopHandler.ViewSession))
+				r.Post("/{agentID}/remote-desktop/control-sessions", RequirePermission("remote_desktop", "execute")(deps.RemoteDesktopHandler.ControlSession))
+				r.Get("/{agentID}/remote-desktop/sessions/{sessionID}", RequirePermission("remote_desktop", "read")(deps.RemoteDesktopHandler.GetSession))
+				r.Delete("/{agentID}/remote-desktop/sessions/{sessionID}", RequirePermission("remote_desktop", "read")(deps.RemoteDesktopHandler.StopSession))
 			})
 
 			// Patchs — vue d'ensemble tenant (dashboard)

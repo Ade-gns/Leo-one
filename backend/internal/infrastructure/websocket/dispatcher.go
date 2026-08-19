@@ -12,6 +12,7 @@ import (
 	inventoryDomain "github.com/yourorg/leo-one/internal/domain/inventory"
 	metricDomain "github.com/yourorg/leo-one/internal/domain/metric"
 	patchDomain "github.com/yourorg/leo-one/internal/domain/patch"
+	rdInfra "github.com/yourorg/leo-one/internal/infrastructure/remotedesktop"
 )
 
 // Enveloppe du protocole WSS (doit correspondre au format de l'agent C).
@@ -33,6 +34,7 @@ const (
 	msgTypePong                 = 7
 	msgTypePatchInventory       = 8
 	msgTypeFileTransferProgress = 9
+	msgTypeRemoteDesktopStatus  = 10
 )
 
 // Intervalles envoyés dans HELLO_ACK (doivent correspondre aux défauts de
@@ -132,8 +134,9 @@ type Dispatcher struct {
 	metricRepo    metricDomain.Repository
 	inventoryRepo inventoryDomain.Repository
 	patchRepo     patchDomain.Repository
-	pool          *pgxpool.Pool // accès direct pour la table commands (pas de repo dédié)
-	hub           *Hub          // référence arrière pour envoyer HELLO_ACK, etc.
+	pool          *pgxpool.Pool  // accès direct pour la table commands (pas de repo dédié)
+	hub           *Hub           // référence arrière pour envoyer HELLO_ACK, etc.
+	remoteDesktop *rdInfra.Relay // nil tant que SetRemoteDesktopRelay n'a pas été appelé (même raison que SetHub : dépendance circulaire à l'init)
 	logger        *slog.Logger
 }
 
@@ -161,12 +164,25 @@ func (d *Dispatcher) SetHub(hub *Hub) {
 	d.hub = hub
 }
 
+// SetRemoteDesktopRelay est appelé après la création du Relay de bureau à
+// distance (voir cmd/server/main.go) pour que MarkOffline puisse y terminer
+// les sessions en cours d'un agent qui se déconnecte — sans quoi une session
+// active resterait ouverte côté navigateur (ou en attente indéfinie d'un
+// agent qui ne reviendra plus sur cette session précise) après le passage
+// offline. Optionnel : un Dispatcher de test peut rester sans relay.
+func (d *Dispatcher) SetRemoteDesktopRelay(relay *rdInfra.Relay) {
+	d.remoteDesktop = relay
+}
+
 // MarkOffline passe un agent en statut offline en BDD, sans toucher à
 // last_seen_at (qui doit continuer à refléter le dernier contact réel).
 // Appelé par Hub.Unregister à la déconnexion WS.
 func (d *Dispatcher) MarkOffline(agentID string) {
 	if err := d.agentRepo.UpdateStatus(context.TODO(), agentID, agentDomain.StatusOffline, nil); err != nil {
 		d.logger.Warn("Échec passage offline", "agent_id", agentID, "error", err)
+	}
+	if d.remoteDesktop != nil {
+		d.remoteDesktop.EndSessionsForAgent(agentID)
 	}
 }
 
@@ -202,6 +218,8 @@ func (d *Dispatcher) Dispatch(client *Client, raw []byte) {
 		d.handlePatchInventory(client, env, log)
 	case msgTypeFileTransferProgress:
 		d.handleFileTransferProgress(client, env, log)
+	case msgTypeRemoteDesktopStatus:
+		d.handleRemoteDesktopStatus(client, env, log)
 	case msgTypePong:
 		log.Debug("PONG reçu")
 	default:
@@ -543,6 +561,19 @@ func (d *Dispatcher) handleFileTransferProgress(client *Client, env envelope, lo
 
 	log.Debug("Avancement du transfert de fichier", "command_id", body.CommandID,
 		"status", body.Status, "percent", body.Percent)
+}
+
+// handleRemoteDesktopStatus reçoit les rapports d'état/erreur envoyés par
+// l'agent pendant une session de bureau à distance (ex : "pas de display
+// X11", "XShm indisponible" — voir agent/src/remote_desktop.c, phase agent
+// pas encore implémentée). Simple journalisation pour l'instant : la fin de
+// session normale/anormale est déjà gérée par le relais lui-même (voir
+// internal/infrastructure/remotedesktop.Relay, fermeture de connexion =
+// fin de session) — router ce statut jusqu'au navigateur (ex: message
+// d'erreur explicite plutôt qu'un simple timeout d'appariement silencieux)
+// sera fait quand l'agent émettra réellement ce message.
+func (d *Dispatcher) handleRemoteDesktopStatus(client *Client, env envelope, log *slog.Logger) {
+	log.Info("REMOTE_DESKTOP_STATUS reçu", "body", string(env.Body))
 }
 
 // normalizePatchSeverity ramène toute valeur inattendue à "important" —

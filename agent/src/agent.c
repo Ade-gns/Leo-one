@@ -21,6 +21,7 @@
 #include "inventory.h"
 #include "patches.h"
 #include "file_transfer.h"
+#include "remote_desktop.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -911,6 +912,64 @@ static void _dispatch_file_transfer(leo_agent_t *ag, const char *cmd_id, cJSON *
     }
 }
 
+/** Bornes acceptées pour les paramètres de session de bureau à distance
+ *  fournis par le backend (voir _dispatch_remote_desktop_start) — le
+ *  backend envoie déjà des valeurs raisonnables (fps=8, quality=60,
+ *  1920x1080, voir RemoteDesktopHandler.createSession côté Go) mais
+ *  l'agent ne leur fait pas confiance aveuglément. */
+#define LEO_RD_FPS_MIN         1
+#define LEO_RD_FPS_MAX        30
+#define LEO_RD_QUALITY_MIN     1
+#define LEO_RD_QUALITY_MAX   100
+#define LEO_RD_DIM_MIN         1
+#define LEO_RD_DIM_MAX      7680  /* 8K, marge large */
+
+/**
+ * Dispatch de LEO_MSG_REMOTE_DESKTOP_START : { "session_id", "ws_url",
+ * "mode", "fps", "quality", "max_width", "max_height" }. Ne passe PAS par
+ * _exec_ctx_t/_exec_thread (contrairement aux autres dispatchers de ce
+ * fichier) : une session de bureau à distance ne produit jamais de
+ * CMD_RESULT et vit potentiellement plusieurs heures — voir
+ * remote_desktop.h, qui gère son propre thread et sa propre borne de
+ * concurrence (une seule session à la fois, indépendante de
+ * LEO_EXEC_MAX_CONCURRENT).
+ */
+static void _dispatch_remote_desktop_start(leo_agent_t *ag, cJSON *body) {
+    if (!body) {
+        LOG_WARN("REMOTE_DESKTOP_START sans corps — ignoré");
+        return;
+    }
+
+    cJSON *jsession = cJSON_GetObjectItemCaseSensitive(body, "session_id");
+    cJSON *jurl     = cJSON_GetObjectItemCaseSensitive(body, "ws_url");
+    cJSON *jmode    = cJSON_GetObjectItemCaseSensitive(body, "mode");
+    cJSON *jfps     = cJSON_GetObjectItemCaseSensitive(body, "fps");
+    cJSON *jquality = cJSON_GetObjectItemCaseSensitive(body, "quality");
+    cJSON *jmaxw    = cJSON_GetObjectItemCaseSensitive(body, "max_width");
+    cJSON *jmaxh    = cJSON_GetObjectItemCaseSensitive(body, "max_height");
+
+    if (!cJSON_IsString(jsession) || !jsession->valuestring[0] ||
+        !cJSON_IsString(jurl) || !jurl->valuestring[0]) {
+        LOG_WARN("REMOTE_DESKTOP_START sans 'session_id'/'ws_url' — ignoré");
+        return;
+    }
+
+    int fps          = cJSON_IsNumber(jfps)     ? _json_number_clamped(jfps->valuedouble, LEO_RD_FPS_MIN, LEO_RD_FPS_MAX) : 8;
+    int quality      = cJSON_IsNumber(jquality) ? _json_number_clamped(jquality->valuedouble, LEO_RD_QUALITY_MIN, LEO_RD_QUALITY_MAX) : 60;
+    int max_width    = cJSON_IsNumber(jmaxw)    ? _json_number_clamped(jmaxw->valuedouble, LEO_RD_DIM_MIN, LEO_RD_DIM_MAX) : 1920;
+    int max_height   = cJSON_IsNumber(jmaxh)    ? _json_number_clamped(jmaxh->valuedouble, LEO_RD_DIM_MIN, LEO_RD_DIM_MAX) : 1080;
+    const char *mode = cJSON_IsString(jmode) ? jmode->valuestring : "view";
+
+    leo_rd_start(ag->conn, &ag->config, jsession->valuestring, jurl->valuestring, mode,
+                 fps, quality, max_width, max_height);
+}
+
+/** Dispatch de LEO_MSG_REMOTE_DESKTOP_STOP : { "session_id" }. */
+static void _dispatch_remote_desktop_stop(cJSON *body) {
+    cJSON *jsession = body ? cJSON_GetObjectItemCaseSensitive(body, "session_id") : NULL;
+    leo_rd_stop(cJSON_IsString(jsession) ? jsession->valuestring : NULL);
+}
+
 /** Délai par défaut avant redémarrage, en secondes — laisse le temps à
  * l'utilisateur de la machine de sauvegarder son travail. */
 #define LEO_REBOOT_DEFAULT_DELAY_SEC  60
@@ -1111,6 +1170,16 @@ static void _on_message(const char *json_str, size_t len, void *userdata) {
         _dispatch_file_transfer(ag, msg.id, msg.body);
         break;
 
+    case LEO_MSG_REMOTE_DESKTOP_START:
+        LOG_INFO("Commande REMOTE_DESKTOP_START reçue (cmd_id=%s)", msg.id);
+        _dispatch_remote_desktop_start(ag, msg.body);
+        break;
+
+    case LEO_MSG_REMOTE_DESKTOP_STOP:
+        LOG_INFO("Commande REMOTE_DESKTOP_STOP reçue (cmd_id=%s)", msg.id);
+        _dispatch_remote_desktop_stop(msg.body);
+        break;
+
     case LEO_MSG_FORCE_HEARTBEAT:
         LOG_INFO("Force heartbeat reçue du serveur");
         pthread_mutex_lock(&ag->wake_mutex);
@@ -1304,6 +1373,18 @@ void leo_agent_stop(leo_agent_t *ag) {
         }
     }
     pthread_mutex_unlock(&ag->exec_mutex);
+
+    /* Même raisonnement que ci-dessus pour le thread de session de bureau à
+     * distance éventuellement en cours : il référence ag->conn et
+     * ag->config (voir remote_desktop.c), qu'on ne doit pas libérer tant
+     * qu'il tourne encore. À faire AVANT leo_conn_destroy() ci-dessous,
+     * puisque le thread de session utilise justement ag->conn pour
+     * envoyer son éventuel LEO_MSG_REMOTE_DESKTOP_STATUS de fin. */
+    if (!leo_rd_stop_all()) {
+        LOG_ERROR("Session de bureau à distance non arrêtée proprement — abandon de l'arrêt "
+                  "(fuite volontaire de l'agent entier, évite un use-after-free depuis ce thread encore actif)");
+        return;
+    }
 
     /* leo_conn_destroy() peut abandonner (return false) si le thread WSS ne
      * rejoint pas dans son délai — dans ce cas conn (et le thread encore

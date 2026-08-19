@@ -67,6 +67,13 @@ type Config struct {
 	// l'exposer ailleurs.
 	EnableAPIDocs   bool
 	OpenAPISpecPath string
+
+	// Bureau à distance (voir internal/domain/remotedesktop et
+	// internal/infrastructure/remotedesktop.Relay) — fenêtre pendant
+	// laquelle agent ET navigateur doivent tous deux se connecter au relais
+	// après la création d'une session, sans quoi elle expire sans jamais
+	// devenir active.
+	RemoteDesktopSessionTTL time.Duration
 }
 
 // PublicWSEndpoint construit l'URL wss:// que les agents utilisent pour se
@@ -77,6 +84,32 @@ func (c *Config) PublicWSEndpoint() string {
 		port = "8081"
 	}
 	return fmt.Sprintf("wss://%s:%s/ws/agent", c.PublicHost, port)
+}
+
+// PublicRemoteDesktopWSEndpoint construit l'URL wss:// que l'agent utilise
+// pour ouvrir sa connexion dédiée de bureau à distance, suite à une commande
+// LEO_MSG_REMOTE_DESKTOP_START (voir RemoteDesktopHandler.createSession) —
+// même listener mTLS que PublicWSEndpoint (:8081), route distincte.
+func (c *Config) PublicRemoteDesktopWSEndpoint() string {
+	_, port, err := net.SplitHostPort(c.WSAgentAddr)
+	if err != nil {
+		port = "8081"
+	}
+	return fmt.Sprintf("wss://%s:%s/ws/remote-desktop", c.PublicHost, port)
+}
+
+// PublicViewerWSEndpoint construit l'URL ws:// que le navigateur utilise
+// pour se connecter au relais de bureau à distance (voir
+// RemoteDesktopHandler.ServeViewerWS) — même serveur/port que
+// PublicAPIEndpoint, jamais TLS ici non plus (voir son commentaire :
+// terminaison TLS éventuelle par un reverse proxy en amont, hors scope de
+// ce serveur).
+func (c *Config) PublicViewerWSEndpoint() string {
+	_, port, err := net.SplitHostPort(c.ServerAddr)
+	if err != nil {
+		port = "8080"
+	}
+	return fmt.Sprintf("ws://%s:%s/api/v1/remote-desktop/ws", c.PublicHost, port)
 }
 
 // PublicAPIEndpoint construit l'URL http:// de l'API REST que les agents
@@ -144,6 +177,8 @@ func Load() (*Config, error) {
 		// Chemin relatif : fonctionne depuis backend/ (go run ./cmd/server,
 		// voir scripts/dev.sh) où docs/ est le répertoire parent immédiat.
 		OpenAPISpecPath: getEnv("OPENAPI_SPEC_PATH", "../docs/openapi.yaml"),
+
+		RemoteDesktopSessionTTL: getEnvDuration("REMOTE_DESKTOP_SESSION_TTL", 30*time.Second),
 	}
 
 	// Variables obligatoires

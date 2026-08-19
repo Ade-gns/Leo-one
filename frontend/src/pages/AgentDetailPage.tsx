@@ -3,7 +3,7 @@
  */
 import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { ChevronLeft, Terminal, Package, RefreshCw, AlertCircle, Zap, FolderOpen } from 'lucide-react'
+import { ChevronLeft, Terminal, Package, RefreshCw, AlertCircle, Zap, FolderOpen, MonitorPlay } from 'lucide-react'
 import { useAgent, useWakeAgent } from '@/hooks/useAgents'
 import { AgentStatusBadge }    from '@/components/agents/AgentStatusBadge'
 import { AgentDetailPanel }    from '@/components/agents/AgentDetailPanel'
@@ -106,6 +106,14 @@ export default function AgentDetailPage() {
           >
             <Terminal className="h-4 w-4" />
             Exécuter un script
+          </button>
+          <button
+            onClick={() => navigate(`/agents/${agent.id}/remote-desktop`)}
+            disabled={agent.status !== 'online'}
+            className="flex items-center gap-2 rounded-lg bg-brand-900 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-700 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <MonitorPlay className="h-4 w-4" />
+            Bureau à distance
           </button>
         </div>
       </div>

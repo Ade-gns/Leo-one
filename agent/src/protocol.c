@@ -257,6 +257,20 @@ int leo_proto_build_file_transfer_progress(const char *cmd_id,
     return _serialize(LEO_MSG_FILE_TRANSFER_PROGRESS, body, buf, bufsz);
 }
 
+int leo_proto_build_remote_desktop_status(const char *session_id,
+                                           const char *status,
+                                           const char *error_msg,
+                                           char *buf, size_t bufsz) {
+    cJSON *body = cJSON_CreateObject();
+    if (!body) return -1;
+
+    cJSON_AddStringToObject(body, "session_id", session_id ? session_id : "");
+    cJSON_AddStringToObject(body, "status",     status ? status : "unknown");
+    if (error_msg) cJSON_AddStringToObject(body, "error", error_msg);
+
+    return _serialize(LEO_MSG_REMOTE_DESKTOP_STATUS, body, buf, bufsz);
+}
+
 /* ─── Désérialisation ───────────────────────────────────────────────────── */
 
 leo_error_t leo_proto_parse(const char *json_str, leo_incoming_msg_t *out) {

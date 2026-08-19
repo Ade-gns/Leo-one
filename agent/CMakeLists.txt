@@ -27,6 +27,7 @@ set(AGENT_COMMON_SOURCES
     src/metrics.c
     src/http_url.c
     src/file_transfer.c
+    src/remote_desktop.c
     third_party/cjson/cJSON.c
 )
 
@@ -39,6 +40,8 @@ if(TARGET_OS STREQUAL "linux" OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
         platform/linux/crypto_linux.c
         platform/linux/inventory_linux.c
         platform/linux/patches_linux.c
+        platform/linux/capture_linux.c
+        platform/linux/input_linux.c
     )
     add_definitions(-DLEO_PLATFORM_LINUX)
 
@@ -152,6 +155,31 @@ add_subdirectory(third_party/libwebsockets EXCLUDE_FROM_ALL)
 # ("websockets_static" est un nom d'une ancienne version, jamais buildé ici).
 target_link_libraries(leo-agent PRIVATE websockets)
 
+# libjpeg-turbo — encodage JPEG des frames de bureau à distance (voir
+# src/remote_desktop.c). PAS vendored : son propre CMakeLists.txt refuse
+# explicitement add_subdirectory() ("The libjpeg-turbo build system cannot
+# be integrated into another build system using add_subdirectory() [...]
+# Please do not file bug reports [...] regarding this" — politique amont
+# délibérée, pas une limitation de configuration de notre côté). Paquet
+# système à la place, même schéma que OpenSSL ci-dessous (find_package sur
+# une bibliothèque système sous Linux) : `apt install libturbojpeg0-dev`.
+# Aucun module CMake officiel FindTurboJPEG n'existe, d'où ce find_path/
+# find_library manuel. La cross-compilation Windows (phase suivante du
+# portage, voir platform/windows/) n'a pas ce paquet dans les dépôts Ubuntu
+# et nécessitera un cross-build depuis les sources — même situation et même
+# solution que celle déjà appliquée à OpenSSL pour Windows (voir
+# cmake/mingw-toolchain.cmake et la mémoire du projet sur le portage
+# Windows), pas encore mise en place ici.
+find_path(TurboJPEG_INCLUDE_DIR NAMES turbojpeg.h)
+find_library(TurboJPEG_LIBRARY NAMES turbojpeg)
+if(NOT TurboJPEG_INCLUDE_DIR OR NOT TurboJPEG_LIBRARY)
+    message(FATAL_ERROR "libturbojpeg introuvable — requis pour le bureau à distance "
+                         "(voir src/remote_desktop.c). Sous Ubuntu/Debian : "
+                         "sudo apt install libturbojpeg0-dev")
+endif()
+target_include_directories(leo-agent PRIVATE ${TurboJPEG_INCLUDE_DIR})
+target_link_libraries(leo-agent PRIVATE ${TurboJPEG_LIBRARY})
+
 # Threads POSIX
 find_package(Threads REQUIRED)
 target_link_libraries(leo-agent PRIVATE Threads::Threads)
@@ -169,6 +197,18 @@ target_link_libraries(leo-agent PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 # via INITGUID, pas besoin d'une bibliothèque d'import wuapi dédiée).
 if(WIN32)
     target_link_libraries(leo-agent PRIVATE ws2_32 crypt32 bcrypt advapi32 iphlpapi ole32 oleaut32)
+endif()
+
+# X11 + extensions Xext (XShm, voir capture_linux.c) et Xtst (XTest, voir
+# input_linux.c) — bureau à distance, Linux uniquement (voir le commentaire
+# en tête de capture_linux.c : pas de support Wayland dans ce premier passage).
+if(TARGET_OS STREQUAL "linux" OR CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_package(X11 REQUIRED)
+    if(NOT X11_Xext_FOUND OR NOT X11_Xtst_FOUND)
+        message(FATAL_ERROR "libXext-dev/libxtst-dev introuvables — requis pour le bureau à distance "
+                             "(voir platform/linux/capture_linux.c et input_linux.c)")
+    endif()
+    target_link_libraries(leo-agent PRIVATE X11::X11 X11::Xext X11::Xtst)
 endif()
 
 # ─── Informations de version compilées dans le binaire ───────────────────────

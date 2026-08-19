@@ -66,6 +66,7 @@ typedef enum {
     LEO_MSG_PONG               =   7,
     LEO_MSG_PATCH_INVENTORY    =   8,   /* agent→backend : liste des patchs disponibles */
     LEO_MSG_FILE_TRANSFER_PROGRESS = 9, /* agent→backend : avancement d'un téléchargement en cours */
+    LEO_MSG_REMOTE_DESKTOP_STATUS = 10, /* agent→backend : erreur/fin d'une session de bureau à distance */
     /* Entrants : backend → agent */
     LEO_MSG_HELLO_ACK          = 100,
     LEO_MSG_EXEC_SCRIPT        = 101,
@@ -77,6 +78,8 @@ typedef enum {
     LEO_MSG_FORCE_HEARTBEAT    = 107,   /* backend→agent : force immediate heartbeat */
     LEO_MSG_INSTALL_PATCHES    = 108,   /* backend→agent : installer une sélection de patchs */
     LEO_MSG_FILE_TRANSFER      = 109,   /* backend→agent : télécharger un fichier depuis une URL signée */
+    LEO_MSG_REMOTE_DESKTOP_START = 110, /* backend→agent : ouvrir une connexion dédiée de bureau à distance */
+    LEO_MSG_REMOTE_DESKTOP_STOP  = 111, /* backend→agent : terminer la session de bureau à distance en cours */
     /* Sentinel */
     LEO_MSG_UNKNOWN            =  -1
 } leo_msg_type_t;
@@ -201,6 +204,15 @@ typedef enum {
     LEO_FILE_TRANSFER_COMPLETED,
     LEO_FILE_TRANSFER_FAILED
 } leo_file_transfer_status_t;
+
+/* ─────────────────────────────────────────────────────────────────────────
+ * Bureau à distance (LEO_MSG_REMOTE_DESKTOP_START/_STOP/_STATUS) — voir
+ * src/remote_desktop.h pour le détail du protocole binaire de la connexion
+ * dédiée.
+ * ───────────────────────────────────────────────────────────────────────── */
+
+#define LEO_RD_WS_URL_MAX_LEN     1024  /* même ordre de grandeur que LEO_FILE_URL_MAX_LEN : jeton en query string */
+#define LEO_RD_MAX_SESSION_SEC   14400  /* 4h : filet de sécurité si le backend/relais ne signale jamais l'arrêt */
 
 /* ─────────────────────────────────────────────────────────────────────────
  * État interne de l'agent (machine d'état)
