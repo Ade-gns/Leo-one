@@ -106,7 +106,11 @@ jobs:
           submodules: recursive
 
       - name: Installer les dépendances de build
-        run: sudo apt-get update && sudo apt-get install -y cmake libssl-dev
+        # libx11-dev/libxext-dev/libxtst-dev + libturbojpeg0-dev : requis
+        # depuis l'ajout du bureau à distance (voir CMakeLists.txt,
+        # find_package(X11 REQUIRED) + find_path/find_library(TurboJPEG))
+        # — sans eux, l'étape "Configurer CMake" échoue dès find_package.
+        run: sudo apt-get update && sudo apt-get install -y cmake libssl-dev libx11-dev libxext-dev libxtst-dev libturbojpeg0-dev
 
       - name: Configurer CMake
         working-directory: agent
