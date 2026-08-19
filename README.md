@@ -7,11 +7,47 @@ poste remonte métriques et inventaire, et permet l'exécution de commandes à
 distance (scripts, installation de paquets, redémarrage), le tout piloté
 depuis une interface web centralisée.
 
-## Envie de l'installer ?
+## Fonctionnalités
+
+- **Métriques temps réel** — CPU, RAM, disque, réseau (séries temporelles
+  via TimescaleDB) et inventaire matériel/logiciel de chaque poste.
+- **Bureau à distance** — vue live de l'écran d'un agent (streaming JPEG) en
+  lecture seule ou avec prise de contrôle clavier/souris.
+- **Transfert de fichiers** — bibliothèque de fichiers déployables
+  (installeurs, configs) envoyés à la demande sur un ou plusieurs postes.
+- **Gestion des mises à jour** — patch management Windows Update / apt-dnf,
+  visibilité sur les postes à jour ou non.
+- **Scripts à distance** — bibliothèque de scripts, exécution ponctuelle ou
+  planifications récurrentes (cron).
+- **Alertes** — règles configurables (seuils métriques, statut agent…),
+  historique et accusé de réception.
+- **Workspaces** — regroupement des machines par site/client/usage.
+- **Comptes, rôles et permissions (RBAC)** — multi-tenant, rôles Admin /
+  Technicien / Lecture seule prédéfinis, rôles personnalisés par permission
+  fine (`ressource:action`).
+- **Journal d'audit** — historique des actions sensibles, réservé aux
+  administrateurs.
+- **Sécurité** — mTLS pour chaque agent (certificat client propre, émis par
+  une CA interne à l'enrollment), JWT + rate limiting sur les routes
+  d'authentification, MFA disponible sur les comptes utilisateurs.
+- **Tableau de bord** — vue d'ensemble agrégée du parc (statuts, alertes
+  actives, patchs en attente…).
+
+## Installation
 
 → **[`release/`](release/README.md)** — packages prêts à l'emploi : serveur
 (Docker) + agent Windows précompilé + agent Linux précompilé, avec un guide
-d'installation pas à pas pour chacun.
+d'installation pas à pas pour chacun. Résumé :
+
+| Composant | À installer sur | Prérequis |
+|---|---|---|
+| [Serveur](release/server/README.md) | Votre serveur (VPS, machine dédiée, cloud) | Docker + plugin Docker Compose |
+| [Agent Windows](release/windows-client/README.md) | Chaque poste Windows à superviser | Windows 7 ou plus récent, 64 bits — binaire autonome, rien d'autre à installer |
+| [Agent Linux](release/linux-client/README.md) | Chaque machine Linux à superviser | Ubuntu/Debian x86-64 glibc + `libx11-6 libxext6 libxtst6 libturbojpeg0` (le binaire ne démarre pas sans elles, même hors usage du bureau à distance) — voir le détail dans son README |
+
+Ordre : déployez d'abord le serveur (il faut un token d'enrollment et une
+adresse joignable avant de pouvoir installer le moindre agent), puis
+installez l'agent sur chaque poste.
 
 ## Architecture
 

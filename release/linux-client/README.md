@@ -11,6 +11,23 @@ apt, redémarrage), connexion sécurisée (mTLS) au serveur Leo-One.
   vous-même après une modification du code : `cmake -B build && cmake
   --build build` depuis `agent/` (voir `agent/CMakeLists.txt`).
 
+## Prérequis
+
+Le binaire est dynamiquement lié à quelques bibliothèques système —
+absentes par défaut sur une installation serveur minimale (contrairement à
+un poste de bureau, où elles sont déjà présentes). Sans elles, `leo-agent`
+refuse de démarrer (erreur de l'éditeur de liens dynamique).
+
+```bash
+sudo apt install -y libx11-6 libxext6 libxtst6 libturbojpeg0 libssl3
+```
+
+`libx11-6`/`libxext6`/`libxtst6` sont nécessaires même sur une machine sans
+écran/serveur X actif — elles ne servent qu'à la fonctionnalité bureau à
+distance, mais le binaire ne démarre pas sans elles (dépendance au chargement,
+pas seulement à l'usage). `libssl3` est généralement déjà installée sur
+Ubuntu/Debian récents.
+
 ## Installation
 
 **1. Copier le binaire.**
@@ -81,6 +98,10 @@ sudo rm -rf /opt/leo-one
   l'installation de paquets à distance (`dpkg-query`/`apt-get`) — le reste
   (métriques, scripts, inventaire matériel) fonctionne sur toute distribution
   Linux glibc.
+- **Bureau à distance sur serveur headless** : capture X11 uniquement
+  (Wayland non supporté). Un serveur sans session graphique active peut
+  installer l'agent normalement (les autres fonctionnalités marchent), mais
+  une tentative de bureau à distance échouera faute de display à capturer.
 - Si l'agent ne se connecte pas, vérifiez d'abord
   `/opt/leo-one/logs/agent.log` — l'erreur la plus fréquente est un
   `api_endpoint` incorrect ou un token déjà expiré/utilisé (regénérez-en un).
