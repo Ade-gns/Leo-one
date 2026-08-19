@@ -75,6 +75,9 @@ rmdir /s C:\ProgramData\LeoOne
   vous administrez réellement.
 - **Pare-feu** : l'agent initie toujours la connexion vers le serveur
   (sortant uniquement) — aucun port entrant à ouvrir sur le poste client.
+- **Aucune dépendance runtime** : `leo-agent.exe` est lié statiquement
+  (OpenSSL, libjpeg-turbo, runtime pthread mingw) — pas de Visual C++
+  Redistributable ni de DLL tierce à installer, `leo-agent.exe` seul suffit.
 - Si l'agent ne se connecte pas, vérifiez d'abord
   `C:\ProgramData\LeoOne\logs\agent.log` — l'erreur la plus fréquente est un
   `api_endpoint` incorrect ou un token déjà expiré/utilisé (regénérez-en un).

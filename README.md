@@ -35,19 +35,57 @@ depuis une interface web centralisée.
 
 ## Installation
 
-→ **[`release/`](release/README.md)** — packages prêts à l'emploi : serveur
-(Docker) + agent Windows précompilé + agent Linux précompilé, avec un guide
-d'installation pas à pas pour chacun. Résumé :
+Ordre : déployez d'abord le serveur (il faut un token d'enrollment et une
+adresse joignable avant de pouvoir installer le moindre agent), puis
+installez l'agent sur chaque poste à superviser.
+
+### 1. Serveur
+
+**Prérequis** : Docker + le plugin Docker Compose (`docker compose version`),
+et un nom de domaine ou une IP joignable par les futurs agents/postes clients.
+
+```bash
+git clone <url-du-dépôt> leo-one && cd leo-one
+cp .env.example .env
+# Éditer .env : changer au minimum JWT_SECRET (32+ caractères aléatoires)
+
+docker compose --profile full up -d
+```
+
+Ça démarre PostgreSQL+TimescaleDB (migrations appliquées automatiquement au
+premier démarrage), le backend (API REST sur 8080, WebSocket agents sur
+8081) et le frontend (port 5173). Vérifier que tout tourne :
+
+```bash
+docker compose ps
+docker compose logs -f backend
+```
+
+**Créer le premier compte administrateur** — pas d'inscription en
+libre-service : le premier tenant (organisation) et son compte admin se
+créent une seule fois, directement en base. Procédure détaillée (génération
+du hash de mot de passe argon2id, requêtes SQL exactes) :
+**[`release/server/README.md`](release/server/README.md#créer-le-premier-compte-administrateur)**.
+
+Se connecter ensuite sur `http://<votre-serveur>:5173`, puis **Machines →
+Générer un token d'enrollment** pour préparer l'installation du premier agent.
+
+Pour un déploiement en production (TLS derrière un reverse proxy, mot de
+passe PostgreSQL, `PUBLIC_API_URL`/`PUBLIC_VIEWER_WS_URL`…), voir la section
+dédiée dans **[`release/server/README.md`](release/server/README.md#passer-en-production)**.
+
+### 2. Agents
 
 | Composant | À installer sur | Prérequis |
 |---|---|---|
-| [Serveur](release/server/README.md) | Votre serveur (VPS, machine dédiée, cloud) | Docker + plugin Docker Compose |
-| [Agent Windows](release/windows-client/README.md) | Chaque poste Windows à superviser | Windows 7 ou plus récent, 64 bits — binaire autonome, rien d'autre à installer |
+| [Agent Windows](release/windows-client/README.md) | Chaque poste Windows à superviser | Windows 7 ou plus récent, 64 bits — binaire autonome (lié statiquement), rien d'autre à installer |
 | [Agent Linux](release/linux-client/README.md) | Chaque machine Linux à superviser | Ubuntu/Debian x86-64 glibc + `libx11-6 libxext6 libxtst6 libturbojpeg0` (le binaire ne démarre pas sans elles, même hors usage du bureau à distance) — voir le détail dans son README |
 
-Ordre : déployez d'abord le serveur (il faut un token d'enrollment et une
-adresse joignable avant de pouvoir installer le moindre agent), puis
-installez l'agent sur chaque poste.
+Chaque guide détaille la copie du binaire, la configuration du token
+d'enrollment (`agent_bootstrap.conf`), et l'installation comme service
+(systemd / service Windows) pour un démarrage automatique.
+
+→ Vue d'ensemble complète des trois packages : **[`release/`](release/README.md)**.
 
 ## Architecture
 

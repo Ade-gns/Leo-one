@@ -114,6 +114,17 @@ if(NOT WIN32)
     # RELRO complet : flags GNU-ld/ELF, absents sous Windows (PE/COFF, pas de
     # segment GNU_RELRO) — un -Wl,-z,relro y ferait échouer l'édition de liens.
     target_link_options(leo-agent PRIVATE -Wl,-z,relro -Wl,-z,now)
+else()
+    # La variante posix de mingw-w64 (nécessaire pour pthread, voir plus haut)
+    # lie par défaut leo-agent.exe dynamiquement à libwinpthread-1.dll (plus
+    # libgcc_s/libstdc++ selon la toolchain) — une DLL du runtime mingw,
+    # absente de toute installation Windows standard. Sans elle à côté de
+    # l'exécutable, le programme refuse de démarrer ("le point d'entrée...
+    # est introuvable" / DLL manquante), alors que release/windows-client/
+    # ne distribue que le .exe seul. Lier statiquement élimine cette
+    # dépendance runtime — cohérent avec OpenSSL/libjpeg-turbo, déjà liés
+    # statiquement pour cette cible (voir mingw-toolchain.cmake).
+    target_link_options(leo-agent PRIVATE -static -static-libgcc)
 endif()
 
 target_include_directories(leo-agent PRIVATE
