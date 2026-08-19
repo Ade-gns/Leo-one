@@ -114,6 +114,7 @@ typedef struct {
     char        cmd_id[LEO_UUID_STR_LEN];
 
     int         http_status;
+    int         timeout_secs;
     volatile bool done;
     volatile bool failed;
     char        err_buf[256];
@@ -192,6 +193,12 @@ static int _dl_lws_callback(struct lws *wsi, enum lws_callback_reasons reason,
     case LWS_CALLBACK_COMPLETED_CLIENT_HTTP:
     case LWS_CALLBACK_CLOSED_CLIENT_HTTP:
         dl->done = true;
+        break;
+
+    case LWS_CALLBACK_TIMER:
+        dl->failed = true;
+        dl->done = true;
+        snprintf(dl->err_buf, sizeof(dl->err_buf), "Timeout du transfert (%ds)", dl->timeout_secs);
         break;
 
     default:
@@ -300,6 +307,10 @@ leo_error_t leo_file_transfer_run(leo_conn_t *conn, const char *cmd_id,
     }
 
     int effective_timeout = timeout_secs > _DL_WRITE_TIMEOUT_SEC_MIN ? timeout_secs : _DL_WRITE_TIMEOUT_SEC_MIN;
+    dl.timeout_secs = effective_timeout;
+    // lws_service() peut ignorer son timeout. Ce timer est donc la borne
+    // effective quand le serveur garde la connexion ouverte sans réponse.
+    lws_set_timer_usecs(wsi, (lws_usec_t)effective_timeout * LWS_US_PER_SEC);
     struct timespec deadline;
     clock_gettime(CLOCK_REALTIME, &deadline);
     deadline.tv_sec += effective_timeout;

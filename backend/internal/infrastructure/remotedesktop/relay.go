@@ -61,11 +61,25 @@ func isInputMessage(payload []byte) bool {
 // pour ne pas attendre 30 secondes réelles (voir relay_test.go).
 var pairTimeout = 30 * time.Second
 
+const (
+	maxRemoteDesktopMessageBytes = 8 << 20
+	remoteDesktopPongWait        = 45 * time.Second
+	// remoteDesktopPingPeriod doit rester nettement inférieur à
+	// remoteDesktopPongWait (idiome standard gorilla/websocket) : c'est le
+	// Pong reçu en réponse à ce Ping qui repousse la deadline de lecture dans
+	// SetPongHandler (voir copyOne) — sans émetteur de Ping, aucun Pong
+	// n'arrive jamais et la deadline, posée une seule fois, finit par expirer
+	// même sur une session saine avec un flux de frames continu (ReadMessage
+	// ne renouvelle pas la deadline lui-même).
+	remoteDesktopPingPeriod = 20 * time.Second
+)
+
 // Relay est le registre des sessions de bureau à distance en cours
 // d'appariement ou actives. Thread-safe.
 type Relay struct {
-	mu       sync.Mutex
-	sessions map[string]*liveSession
+	mu            sync.Mutex
+	sessions      map[string]*liveSession
+	endedSessions map[string]struct{}
 
 	repo   rdDomain.Repository
 	logger *slog.Logger
@@ -78,16 +92,33 @@ type liveSession struct {
 
 	agentConn  *websocket.Conn
 	viewerConn *websocket.Conn
+	ended      bool // protégé par Relay.mu
 
 	endOnce sync.Once
+}
+
+// Register réserve une session dès sa création. Cela ferme la fenêtre où un
+// STOP pouvait marquer la session terminée en base avant le premier upgrade,
+// puis laisser AttachAgent/AttachViewer la remettre en circulation.
+func (r *Relay) Register(sess *rdDomain.Session) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, exists := r.sessions[sess.ID]; exists {
+		return false
+	}
+	ls := &liveSession{sessionID: sess.ID, agentID: sess.AgentID, mode: sess.Mode}
+	r.sessions[sess.ID] = ls
+	go r.waitPairTimeout(ls)
+	return true
 }
 
 // NewRelay crée un Relay.
 func NewRelay(repo rdDomain.Repository, logger *slog.Logger) *Relay {
 	return &Relay{
-		sessions: make(map[string]*liveSession),
-		repo:     repo,
-		logger:   logger,
+		sessions:      make(map[string]*liveSession),
+		endedSessions: make(map[string]struct{}),
+		repo:          repo,
+		logger:        logger,
 	}
 }
 
@@ -106,10 +137,26 @@ func (r *Relay) AttachViewer(sess *rdDomain.Session, conn *websocket.Conn) {
 
 func (r *Relay) attach(sess *rdDomain.Session, conn *websocket.Conn, isAgent bool) {
 	r.mu.Lock()
+	if _, ended := r.endedSessions[sess.ID]; ended {
+		r.mu.Unlock()
+		_ = conn.WriteControl(websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseNormalClosure, "session terminée"),
+			time.Now().Add(time.Second))
+		conn.Close()
+		return
+	}
 	ls, ok := r.sessions[sess.ID]
 	if !ok {
 		ls = &liveSession{sessionID: sess.ID, agentID: sess.AgentID, mode: sess.Mode}
 		r.sessions[sess.ID] = ls
+	}
+	if ls.ended {
+		r.mu.Unlock()
+		_ = conn.WriteControl(websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseNormalClosure, "session terminée"),
+			time.Now().Add(time.Second))
+		conn.Close()
+		return
 	}
 
 	var duplicate bool
@@ -141,7 +188,7 @@ func (r *Relay) attach(sess *rdDomain.Session, conn *websocket.Conn, isAgent boo
 
 	if ready {
 		go r.pump(ls)
-	} else {
+	} else if !ok {
 		go r.waitPairTimeout(ls)
 	}
 }
@@ -165,9 +212,16 @@ func (r *Relay) pump(ls *liveSession) {
 	log.Info("Session de bureau à distance active")
 
 	done := make(chan struct{}, 2)
+	stop := make(chan struct{})
+	defer close(stop)
 
 	copyOne := func(from, to *websocket.Conn, filterInput bool) {
 		defer func() { done <- struct{}{} }()
+		from.SetReadLimit(maxRemoteDesktopMessageBytes)
+		_ = from.SetReadDeadline(time.Now().Add(remoteDesktopPongWait))
+		from.SetPongHandler(func(string) error {
+			return from.SetReadDeadline(time.Now().Add(remoteDesktopPongWait))
+		})
 		for {
 			msgType, payload, err := from.ReadMessage()
 			if err != nil {
@@ -186,8 +240,31 @@ func (r *Relay) pump(ls *liveSession) {
 		}
 	}
 
+	// WriteControl utilise le même verrou d'écriture interne que
+	// WriteMessage (voir gorilla/websocket conn.go) — l'appeler ici pendant
+	// qu'une des deux goroutines copyOne écrit potentiellement sur la même
+	// connexion (via `to.WriteMessage`) est documenté comme sûr ("The Close
+	// and WriteControl methods can be called concurrently with all other
+	// methods"), pas de section critique supplémentaire nécessaire.
+	pingLoop := func(conn *websocket.Conn) {
+		ticker := time.NewTicker(remoteDesktopPingPeriod)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second)); err != nil {
+					return
+				}
+			case <-stop:
+				return
+			}
+		}
+	}
+
 	go copyOne(ls.agentConn, ls.viewerConn, false)
 	go copyOne(ls.viewerConn, ls.agentConn, ls.mode == rdDomain.ModeView)
+	go pingLoop(ls.agentConn)
+	go pingLoop(ls.viewerConn)
 
 	<-done // le premier sens à s'arrêter termine toute la session
 
@@ -204,7 +281,17 @@ func (r *Relay) end(ls *liveSession, reason string) {
 		if r.sessions[ls.sessionID] == ls {
 			delete(r.sessions, ls.sessionID)
 		}
+		ls.ended = true
+		r.endedSessions[ls.sessionID] = struct{}{}
 		r.mu.Unlock()
+		// Les identifiants sont des UUID à usage unique ; conserver un court
+		// tombstone ferme la course stop/upgrade sans faire croître la map à
+		// l'infini sur un serveur de longue durée.
+		time.AfterFunc(5*time.Minute, func() {
+			r.mu.Lock()
+			delete(r.endedSessions, ls.sessionID)
+			r.mu.Unlock()
+		})
 
 		if ls.agentConn != nil {
 			ls.agentConn.Close()

@@ -3,6 +3,8 @@ package http
 import (
 	"log/slog"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	tenantDomain "github.com/yourorg/leo-one/internal/domain/tenant"
 	pkgauth "github.com/yourorg/leo-one/internal/pkg/auth"
 	"github.com/yourorg/leo-one/internal/pkg/ratelimit"
@@ -41,6 +43,7 @@ type Dependencies struct {
 	// Infrastructure
 	JWTVerifier     *pkgauth.JWTVerifier
 	TenantRepo      tenantDomain.Repository
+	DBPool          *pgxpool.Pool
 	AuditLogger     *handlers.AuditLogger
 	AuthRateLimiter *ratelimit.Limiter // rate limiting par IP sur /auth/*, /enroll
 

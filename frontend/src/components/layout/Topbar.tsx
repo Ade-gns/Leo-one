@@ -19,22 +19,22 @@ export function Topbar() {
   }
 
   return (
-    <header className="flex h-16 shrink-0 items-center gap-4 border-b border-gray-200 bg-white px-6">
+    <header className="flex h-16 shrink-0 items-center gap-4 border-b border-slate-200/80 bg-white/85 px-5 backdrop-blur-xl sm:px-6">
 
       {/* Recherche globale */}
-      <div className="flex flex-1 items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 max-w-md">
-        <Search className="h-4 w-4 text-gray-400" />
+      <div className="flex max-w-md flex-1 items-center gap-2 rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2 shadow-inner shadow-slate-100 focus-within:border-brand-300 focus-within:bg-white">
+        <Search className="h-4 w-4 text-slate-400" />
         <input
           type="text"
           placeholder="Rechercher une machine, une alerte…"
-          className="flex-1 bg-transparent text-sm text-gray-700 outline-none placeholder:text-gray-400"
+          className="flex-1 bg-transparent text-sm text-slate-700 outline-none placeholder:text-slate-400"
         />
       </div>
 
       <div className="flex items-center gap-2 ml-auto">
         {/* Cloche de notifications */}
         <button
-          className="relative rounded-lg p-2 text-gray-500 hover:bg-gray-100"
+          className="icon-button relative"
           aria-label="Notifications"
         >
           <Bell className="h-5 w-5" />
@@ -46,11 +46,11 @@ export function Topbar() {
         </button>
 
         {/* Profil utilisateur */}
-        <div className="flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-1.5">
-          <div className="flex h-7 w-7 items-center justify-center rounded-full bg-brand-900 text-white text-xs font-semibold">
+        <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-1.5 shadow-sm">
+          <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-gradient-to-br from-brand-700 to-slate-900 text-xs font-semibold text-white">
             {user?.full_name?.charAt(0).toUpperCase() ?? <User className="h-4 w-4" />}
           </div>
-          <span className="text-sm font-medium text-gray-700 hidden md:block">
+          <span className="hidden text-sm font-medium text-slate-700 md:block">
             {user?.full_name}
           </span>
         </div>
@@ -58,7 +58,7 @@ export function Topbar() {
         {/* Déconnexion */}
         <button
           onClick={handleLogout}
-          className="rounded-lg p-2 text-gray-500 hover:bg-gray-100 hover:text-red-600"
+          className="icon-button hover:text-red-600"
           aria-label="Se déconnecter"
         >
           <LogOut className="h-5 w-5" />

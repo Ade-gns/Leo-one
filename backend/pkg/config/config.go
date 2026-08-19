@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -42,6 +43,11 @@ type Config struct {
 	// Nom d'hôte ou IP publique du serveur — utilisé comme SAN du certificat
 	// WSS et pour construire le ws_endpoint renvoyé aux agents à l'enrollment.
 	PublicHost string
+	// URLs publiques réellement exposées aux navigateurs et agents. En
+	// production elles doivent être HTTPS/WSS, même si un reverse proxy
+	// termine TLS devant les listeners internes du processus Go.
+	PublicAPIURL      string
+	PublicViewerWSURL string
 
 	// Logging
 	LogLevel string // "debug" | "info" | "warn" | "error"
@@ -105,6 +111,9 @@ func (c *Config) PublicRemoteDesktopWSEndpoint() string {
 // terminaison TLS éventuelle par un reverse proxy en amont, hors scope de
 // ce serveur).
 func (c *Config) PublicViewerWSEndpoint() string {
+	if c.PublicViewerWSURL != "" {
+		return c.PublicViewerWSURL
+	}
 	_, port, err := net.SplitHostPort(c.ServerAddr)
 	if err != nil {
 		port = "8080"
@@ -118,6 +127,9 @@ func (c *Config) PublicViewerWSEndpoint() string {
 // httpServer.ListenAndServe(), pas ListenAndServeTLS — seul le listener WSS
 // agents l'est).
 func (c *Config) PublicAPIEndpoint() string {
+	if c.PublicAPIURL != "" {
+		return c.PublicAPIURL
+	}
 	_, port, err := net.SplitHostPort(c.ServerAddr)
 	if err != nil {
 		port = "8080"
@@ -155,7 +167,9 @@ func Load() (*Config, error) {
 		ServerCertPath: getEnv("SERVER_CERT_PATH", "./data/pki/server-cert.pem"),
 		ServerKeyPath:  getEnv("SERVER_KEY_PATH", "./data/pki/server-key.pem"),
 
-		PublicHost: getEnv("PUBLIC_HOST", "localhost"),
+		PublicHost:        getEnv("PUBLIC_HOST", "localhost"),
+		PublicAPIURL:      getEnv("PUBLIC_API_URL", ""),
+		PublicViewerWSURL: getEnv("PUBLIC_VIEWER_WS_URL", ""),
 
 		LogLevel: getEnv("LOG_LEVEL", "info"),
 
@@ -193,6 +207,14 @@ func Load() (*Config, error) {
 		required[key] = val
 	}
 	cfg.DatabaseURL = required["DATABASE_URL"]
+	if !cfg.IsDevelopment() {
+		if !strings.HasPrefix(cfg.PublicAPIURL, "https://") {
+			return nil, fmt.Errorf("PUBLIC_API_URL doit être une URL https:// en production")
+		}
+		if !strings.HasPrefix(cfg.PublicViewerWSURL, "wss://") {
+			return nil, fmt.Errorf("PUBLIC_VIEWER_WS_URL doit être une URL wss:// en production")
+		}
+	}
 
 	return cfg, nil
 }

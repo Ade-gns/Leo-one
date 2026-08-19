@@ -54,6 +54,9 @@ function leoButton(domButton: number): number {
 export function RemoteDesktopViewer({ viewerWsUrl, mode, onEnded }: RemoteDesktopViewerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const wsRef      = useRef<WebSocket | null>(null)
+  const lastFrameSeqRef = useRef(-1)
+  const pressedKeysRef = useRef(new Set<number>())
+  const pressedButtonsRef = useRef(new Set<number>())
   const [state, setState] = useState<ConnectionState>('connecting')
 
   // ── Connexion WS + rendu des frames ────────────────────────────────────
@@ -73,6 +76,7 @@ export function RemoteDesktopViewer({ viewerWsUrl, mode, onEnded }: RemoteDeskto
       const view   = new DataView(ev.data)
       const width  = view.getUint16(1)
       const height = view.getUint16(3)
+      const seq    = view.getUint32(5)
       const jpegBytes = ev.data.slice(9)
 
       const canvas = canvasRef.current
@@ -80,6 +84,13 @@ export function RemoteDesktopViewer({ viewerWsUrl, mode, onEnded }: RemoteDeskto
 
       try {
         const bitmap = await createImageBitmap(new Blob([jpegBytes], { type: 'image/jpeg' }))
+        // Le décodage JPEG est asynchrone : ne pas laisser une vieille frame
+        // finie tardivement écraser une image plus récente.
+        if (seq <= lastFrameSeqRef.current) {
+          bitmap.close()
+          return
+        }
+        lastFrameSeqRef.current = seq
         if (canvas.width !== width || canvas.height !== height) {
           canvas.width  = width
           canvas.height = height
@@ -129,9 +140,12 @@ export function RemoteDesktopViewer({ viewerWsUrl, mode, onEnded }: RemoteDeskto
     }
     const onMouseDown = (e: MouseEvent) => {
       e.preventDefault()
+      canvas.focus()
+      pressedButtonsRef.current.add(e.button)
       send([WIRE_INPUT_BUTTON, leoButton(e.button), 1])
     }
     const onMouseUp = (e: MouseEvent) => {
+      pressedButtonsRef.current.delete(e.button)
       send([WIRE_INPUT_BUTTON, leoButton(e.button), 0])
     }
     const onWheel = (e: WheelEvent) => {
@@ -145,13 +159,24 @@ export function RemoteDesktopViewer({ viewerWsUrl, mode, onEnded }: RemoteDeskto
       const key = leoKeyForCode(e.code)
       if (key === null) return
       e.preventDefault()
+      pressedKeysRef.current.add(key)
       send([WIRE_INPUT_KEY, key, 1])
     }
     const onKeyUp = (e: KeyboardEvent) => {
       const key = leoKeyForCode(e.code)
       if (key === null) return
       e.preventDefault()
+      pressedKeysRef.current.delete(key)
       send([WIRE_INPUT_KEY, key, 0])
+    }
+    const releaseAll = () => {
+      for (const key of pressedKeysRef.current) send([WIRE_INPUT_KEY, key, 0])
+      for (const button of pressedButtonsRef.current) send([WIRE_INPUT_BUTTON, leoButton(button), 0])
+      pressedKeysRef.current.clear()
+      pressedButtonsRef.current.clear()
+    }
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== 'visible') releaseAll()
     }
 
     canvas.addEventListener('mousemove', onMouseMove)
@@ -161,6 +186,8 @@ export function RemoteDesktopViewer({ viewerWsUrl, mode, onEnded }: RemoteDeskto
     canvas.addEventListener('contextmenu', onContextMenu)
     window.addEventListener('keydown', onKeyDown)
     window.addEventListener('keyup', onKeyUp)
+    window.addEventListener('blur', releaseAll)
+    document.addEventListener('visibilitychange', onVisibilityChange)
 
     return () => {
       canvas.removeEventListener('mousemove', onMouseMove)
@@ -170,6 +197,9 @@ export function RemoteDesktopViewer({ viewerWsUrl, mode, onEnded }: RemoteDeskto
       canvas.removeEventListener('contextmenu', onContextMenu)
       window.removeEventListener('keydown', onKeyDown)
       window.removeEventListener('keyup', onKeyUp)
+      window.removeEventListener('blur', releaseAll)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+      releaseAll()
     }
   }, [mode])
 
@@ -177,6 +207,7 @@ export function RemoteDesktopViewer({ viewerWsUrl, mode, onEnded }: RemoteDeskto
     <div className="relative flex h-full w-full items-center justify-center overflow-auto bg-black">
       <canvas
         ref={canvasRef}
+        tabIndex={0}
         className="max-h-full max-w-full"
         style={{ cursor: mode === 'control' ? 'none' : 'default' }}
       />

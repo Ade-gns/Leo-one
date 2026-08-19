@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"log/slog"
 	"net"
 	"net/http"
@@ -8,6 +9,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	tenantDomain "github.com/yourorg/leo-one/internal/domain/tenant"
 	"github.com/yourorg/leo-one/internal/interfaces/http/httpctx"
@@ -15,6 +17,18 @@ import (
 	"github.com/yourorg/leo-one/internal/pkg/ratelimit"
 	"github.com/yourorg/leo-one/internal/pkg/response"
 )
+
+type rbacPoolKey struct{}
+
+// RBACMiddleware rend le pool disponible aux guards de permission sans
+// l'exposer aux handlers. Un pool absent est traité fail-closed.
+func RBACMiddleware(pool *pgxpool.Pool) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), rbacPoolKey{}, pool)))
+		})
+	}
+}
 
 // LoggerMiddleware logue chaque requête HTTP avec le temps de traitement et le status code.
 func LoggerMiddleware(logger *slog.Logger) func(http.Handler) http.Handler {
@@ -143,9 +157,9 @@ func TenantMiddleware(repo tenantDomain.Repository) func(http.Handler) http.Hand
 	}
 }
 
-// RequirePermission vérifie que l'utilisateur possède la permission requise.
-// Implémentation simplifiée : les admins ont toutes les permissions.
-// Pour les non-admins, seules les actions "read" sont autorisées (RBAC complet = Phase suivante).
+// RequirePermission vérifie que l'utilisateur possède réellement la
+// permission demandée via ses rôles du tenant courant. Les administrateurs
+// gardent l'accès complet, mais les autres comptes sont refusés par défaut.
 //
 // Retourne func(http.HandlerFunc) http.HandlerFunc pour être compatible avec le
 // pattern d'appel inline utilisé dans router.go :
@@ -160,9 +174,28 @@ func RequirePermission(resource, action string) func(http.HandlerFunc) http.Hand
 				return
 			}
 
-			// TODO : implémenter la vérification RBAC complète (rôles/permissions en BDD)
-			// Pour l'instant, les non-admins ont accès aux routes en lecture seule.
-			if action == "read" {
+			pool, _ := r.Context().Value(rbacPoolKey{}).(*pgxpool.Pool)
+			if pool == nil {
+				response.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "RBAC non configuré")
+				return
+			}
+			var allowed bool
+			err := pool.QueryRow(r.Context(), `
+				SELECT EXISTS(
+					SELECT 1
+					FROM user_roles ur
+					JOIN roles ro ON ro.id = ur.role_id
+					JOIN role_permissions rp ON rp.role_id = ro.id
+					JOIN permissions p ON p.id = rp.permission_id
+					WHERE ur.user_id = $1 AND ro.tenant_id = $2
+					  AND p.resource = $3 AND p.action = $4
+				)
+			`, httpctx.UserIDFromContext(r.Context()), httpctx.TenantIDFromContext(r.Context()), resource, action).Scan(&allowed)
+			if err != nil {
+				response.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "erreur de vérification des permissions")
+				return
+			}
+			if allowed {
 				next(w, r)
 				return
 			}
@@ -175,11 +208,12 @@ func RequirePermission(resource, action string) func(http.HandlerFunc) http.Hand
 
 // RequireAdmin restreint une route aux utilisateurs administrateurs (claim
 // is_admin du JWT), quel que soit leur rôle personnalisé. Utilisé pour le
-// journal d'audit : RequirePermission ne peut pas exprimer "réservé aux
-// admins" tant que la vérification RBAC granulaire reste un stub (voir son
-// commentaire ci-dessus) — celui-ci autorise aujourd'hui tout utilisateur
-// authentifié sur une action "read", quelle que soit la ressource, ce qui
-// est trop permissif pour l'audit.
+// journal d'audit : même si un rôle personnalisé se voit accorder la
+// permission "audit:read" via RequirePermission, l'historique d'audit
+// touche potentiellement les actions de TOUS les utilisateurs du tenant
+// (pas seulement les siennes) — un choix de politique délibéré (pas un
+// contournement d'un stub) de garder cette route strictement réservée aux
+// administrateurs plutôt que RBAC-granulaire comme le reste de l'API.
 func RequireAdmin(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !httpctx.IsAdminFromContext(r.Context()) {

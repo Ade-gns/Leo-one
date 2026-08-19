@@ -151,6 +151,11 @@ func (h *RemoteDesktopHandler) createSession(w http.ResponseWriter, r *http.Requ
 		response.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "erreur lors de la création de la session")
 		return
 	}
+	if !h.relay.Register(sess) {
+		_ = h.repo.MarkEnded(r.Context(), sess.ID, "relay_registration_failed")
+		response.Error(w, http.StatusConflict, "SESSION_ALREADY_ACTIVE", "une session de bureau à distance est déjà en cours sur cet agent")
+		return
+	}
 
 	body, _ := json.Marshal(map[string]any{
 		"session_id": sess.ID,
@@ -173,7 +178,7 @@ func (h *RemoteDesktopHandler) createSession(w http.ResponseWriter, r *http.Requ
 		// IsConnected ci-dessus et cet envoi. La session ne pourra jamais
 		// devenir active — on la termine tout de suite plutôt que de laisser
 		// le navigateur attendre l'expiration du jeton.
-		_ = h.repo.MarkEnded(r.Context(), sess.ID, "agent_offline")
+		h.relay.EndSession(sess.ID, "agent_offline")
 		response.Error(w, http.StatusConflict, "AGENT_OFFLINE", "l'agent s'est déconnecté")
 		return
 	}

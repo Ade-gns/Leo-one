@@ -122,6 +122,10 @@ La configuration ci-dessus est pensée pour un premier déploiement/test :
   derrière un reverse proxy (nginx/Caddy/Traefik) qui termine le TLS. C'est
   important en particulier pour le port 8081 (WSS) : les agents refusent de
   se connecter en clair (mTLS/pinning de certificat requis côté agent).
+  En mode `APP_ENV=production`, renseignez obligatoirement les URLs externes
+  TLS du proxy : `PUBLIC_API_URL=https://rmm.example.com` et
+  `PUBLIC_VIEWER_WS_URL=wss://rmm.example.com/api/v1/remote-desktop/ws`.
+  Ne publiez jamais les ports internes 8080/8081 directement sur Internet.
 - **Ne pas exposer directement** le port PostgreSQL (5432) à Internet — il
   n'est utile qu'en local/debug.
 

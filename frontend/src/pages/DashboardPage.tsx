@@ -20,10 +20,11 @@ export default function DashboardPage() {
   const patchSummary = patchSummaryResp?.data
 
   return (
-    <div className="flex flex-col gap-6 p-6">
+    <div className="page-shell flex flex-col gap-6">
       <div>
-        <h1 className="text-xl font-bold text-gray-900">Tableau de bord</h1>
-        <p className="text-sm text-gray-500 mt-0.5">Vue globale de l'infrastructure supervisée</p>
+        <p className="mb-1 text-xs font-semibold uppercase tracking-[0.14em] text-brand-700">Vue d'ensemble</p>
+        <h1 className="text-2xl font-bold tracking-tight text-slate-950">Tableau de bord</h1>
+        <p className="mt-1 text-sm text-slate-500">Vue globale de l'infrastructure supervisée</p>
       </div>
 
       {/* KPI Cards */}
@@ -77,14 +78,14 @@ export default function DashboardPage() {
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
 
         {/* Répartition statuts */}
-        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-          <h2 className="mb-4 font-semibold text-gray-800">Répartition des statuts</h2>
+        <div className="surface-card p-5">
+          <h2 className="mb-4 font-semibold text-slate-800">Répartition des statuts</h2>
           <AgentStatusChart />
         </div>
 
         {/* Alertes récentes */}
-        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-          <h2 className="mb-4 font-semibold text-gray-800">Alertes actives</h2>
+        <div className="surface-card p-5">
+          <h2 className="mb-4 font-semibold text-slate-800">Alertes actives</h2>
           <RecentAlerts />
         </div>
       </div>

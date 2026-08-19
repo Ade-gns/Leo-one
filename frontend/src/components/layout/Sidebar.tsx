@@ -42,16 +42,18 @@ export function Sidebar() {
   return (
     <aside
       className={cn(
-        'fixed inset-y-0 left-0 z-40 flex flex-col bg-brand-900 text-white',
+        'fixed inset-y-0 left-0 z-40 flex flex-col border-r border-white/10 bg-gradient-to-b from-slate-950 via-brand-900 to-slate-900 text-white shadow-2xl shadow-slate-950/20',
         'transition-all duration-300',
         sidebarOpen ? 'w-64' : 'w-16',
       )}
     >
       {/* Logo */}
       <div className="flex h-16 items-center gap-3 border-b border-white/10 px-4">
-        <Shield className="h-7 w-7 shrink-0 text-blue-400" />
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-blue-400/15 ring-1 ring-blue-300/30">
+          <Shield className="h-5 w-5 text-blue-200" />
+        </span>
         {sidebarOpen && (
-          <span className="text-lg font-bold tracking-tight">Leo-One</span>
+          <span className="text-lg font-bold tracking-tight">Leo<span className="text-blue-300">-One</span></span>
         )}
       </div>
 
@@ -63,11 +65,11 @@ export function Sidebar() {
             to={item.to}
             end={item.to === '/'}
             className={({ isActive }) => cn(
-              'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium',
-              'transition-colors duration-150',
+              'flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium',
+              'transition-all duration-150',
               isActive
-                ? 'bg-white/20 text-white'
-                : 'text-white/70 hover:bg-white/10 hover:text-white',
+                ? 'bg-white/15 text-white shadow-sm ring-1 ring-white/10'
+                : 'text-white/65 hover:bg-white/10 hover:text-white',
             )}
           >
             <item.icon className="h-5 w-5 shrink-0" />

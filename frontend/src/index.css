@@ -9,11 +9,26 @@
   }
 
   body {
-    @apply bg-gray-50 text-gray-900;
+    @apply bg-slate-50 text-slate-900;
+    background-image: radial-gradient(circle at top, rgb(239 246 255 / 0.8), transparent 34rem);
   }
 
   *:focus-visible {
     @apply outline-none ring-2 ring-brand-500 ring-offset-1;
+  }
+}
+
+@layer components {
+  .page-shell {
+    @apply mx-auto w-full max-w-[1600px] p-5 sm:p-6 lg:p-8;
+  }
+
+  .surface-card {
+    @apply rounded-2xl border border-slate-200/80 bg-white shadow-[0_1px_2px_rgb(15_23_42/0.04),0_12px_28px_rgb(15_23_42/0.04)];
+  }
+
+  .icon-button {
+    @apply inline-flex items-center justify-center rounded-xl p-2 text-slate-500 transition hover:bg-slate-100 hover:text-slate-900;
   }
 }
 

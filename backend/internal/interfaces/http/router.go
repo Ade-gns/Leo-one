@@ -593,6 +593,7 @@ func NewRouter(deps *Dependencies) http.Handler {
 	r.Use(middleware.RealIP)
 	r.Use(LoggerMiddleware(deps.Logger))
 	r.Use(middleware.Recoverer)
+	r.Use(RBACMiddleware(deps.DBPool))
 
 	// ── Routes publiques ──────────────────────────────────────────────────────
 	r.Get("/health", deps.AuthHandler.Health)

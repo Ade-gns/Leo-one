@@ -225,7 +225,8 @@ func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 	userID, _ := claims["sub"].(string)
 	tenantID, _ := claims["tenant_id"].(string)
 
-	// Vérifier que l'utilisateur existe toujours et est actif
+	// Vérifier à nouveau le compte : un refresh token antérieur à une
+	// désactivation ou une suppression ne doit plus être utilisable.
 	var isAdmin bool
 	err = h.pool.QueryRow(r.Context(), `
 		SELECT EXISTS(
@@ -233,15 +234,16 @@ func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 		  JOIN roles ro ON ro.id = ur.role_id
 		  WHERE ur.user_id = u.id AND ro.name = 'Admin' AND ro.is_system = true
 		)
-		FROM users u WHERE u.id = $1 AND u.is_active = true
-	`, userID).Scan(&isAdmin)
+		FROM users u WHERE u.id = $1 AND u.tenant_id = $2 AND u.is_active = true
+		LIMIT 1
+	`, userID, tenantID).Scan(&isAdmin)
 	if errors.Is(err, pgx.ErrNoRows) {
 		response.Error(w, http.StatusUnauthorized, "UNAUTHORIZED", "utilisateur introuvable ou inactif")
 		return
 	}
 	if err != nil {
-		// Fallback: génère le token sans vérifier is_admin
-		isAdmin = false
+		response.Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "erreur de base de données")
+		return
 	}
 
 	now := time.Now()

@@ -18,7 +18,7 @@ export function AppShell() {
   const sidebarOpen = useUIStore(s => s.sidebarOpen)
 
   return (
-    <div className="flex h-screen overflow-hidden bg-gray-50">
+    <div className="flex h-screen overflow-hidden bg-slate-50">
       <Sidebar />
 
       <div
@@ -29,7 +29,7 @@ export function AppShell() {
       >
         <Topbar />
 
-        <main className="flex-1 overflow-y-auto">
+        <main className="flex-1 overflow-y-auto scrollbar-thin">
           <Outlet />
         </main>
       </div>

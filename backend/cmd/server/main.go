@@ -47,6 +47,10 @@ func main() {
 	// JWT_SECRET : lu directement depuis l'environnement (HS256)
 	jwtSecret := os.Getenv("JWT_SECRET")
 	if jwtSecret == "" {
+		if !cfg.IsDevelopment() {
+			slog.Error("JWT_SECRET est obligatoire hors développement")
+			os.Exit(1)
+		}
 		jwtSecret = "leo-one-dev-secret-change-in-production"
 		slog.Warn("JWT_SECRET non défini — utilisation d'un secret de développement")
 	}
@@ -199,6 +203,7 @@ func main() {
 		EnableAPIDocs:        cfg.EnableAPIDocs,
 		JWTVerifier:          jwtVerifier,
 		TenantRepo:           tenantRepo,
+		DBPool:               pool,
 		AuditLogger:          auditLogger,
 		AuthRateLimiter:      authIPLimiter,
 		Logger:               log,
