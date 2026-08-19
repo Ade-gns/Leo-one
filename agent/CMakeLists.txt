@@ -53,6 +53,8 @@ elseif(TARGET_OS STREQUAL "windows" OR CMAKE_SYSTEM_NAME STREQUAL "Windows")
         platform/windows/crypto_win.c
         platform/windows/inventory_win.c
         platform/windows/patches_win.c
+        platform/windows/capture_win.c
+        platform/windows/input_win.c
     )
     add_definitions(-DLEO_PLATFORM_WINDOWS)
     # Cible Windows 7+ (0x0601) : nécessaire pour que <iphlpapi.h> déclare
@@ -164,12 +166,12 @@ target_link_libraries(leo-agent PRIVATE websockets)
 # système à la place, même schéma que OpenSSL ci-dessous (find_package sur
 # une bibliothèque système sous Linux) : `apt install libturbojpeg0-dev`.
 # Aucun module CMake officiel FindTurboJPEG n'existe, d'où ce find_path/
-# find_library manuel. La cross-compilation Windows (phase suivante du
-# portage, voir platform/windows/) n'a pas ce paquet dans les dépôts Ubuntu
-# et nécessitera un cross-build depuis les sources — même situation et même
-# solution que celle déjà appliquée à OpenSSL pour Windows (voir
-# cmake/mingw-toolchain.cmake et la mémoire du projet sur le portage
-# Windows), pas encore mise en place ici.
+# find_library manuel — fonctionne aussi bien pour le paquet système Linux
+# que pour un préfixe mingw cross-compilé (voir TURBOJPEG_MINGW_PREFIX dans
+# cmake/mingw-toolchain.cmake pour Windows, même schéma que
+# OPENSSL_MINGW_PREFIX pour OpenSSL) : dans les deux cas c'est
+# CMAKE_FIND_ROOT_PATH qui détermine où chercher, cette section n'a pas
+# besoin de connaître la plateforme cible.
 find_path(TurboJPEG_INCLUDE_DIR NAMES turbojpeg.h)
 find_library(TurboJPEG_LIBRARY NAMES turbojpeg)
 if(NOT TurboJPEG_INCLUDE_DIR OR NOT TurboJPEG_LIBRARY)
@@ -194,9 +196,13 @@ target_link_libraries(leo-agent PRIVATE OpenSSL::SSL OpenSSL::Crypto)
 # voir patches_win.c), iphlpapi (GetIfTable2), ole32/oleaut32 (API COM
 # Windows Update Agent — CoCreateInstance/BSTR/DECIMAL, voir patches_win.c ;
 # les GUID CLSID_UpdateSession & co. sont définis dans patches_win.c lui-même
-# via INITGUID, pas besoin d'une bibliothèque d'import wuapi dédiée).
+# via INITGUID, pas besoin d'une bibliothèque d'import wuapi dédiée), gdi32
+# (BitBlt/CreateDIBSection — capture d'écran, voir capture_win.c). user32
+# (GetSystemMetrics/SendInput — capture_win.c/input_win.c) est déjà tiré
+# transitivement par les bibliothèques d'import par défaut de mingw, pas
+# besoin de le lister explicitement.
 if(WIN32)
-    target_link_libraries(leo-agent PRIVATE ws2_32 crypt32 bcrypt advapi32 iphlpapi ole32 oleaut32)
+    target_link_libraries(leo-agent PRIVATE ws2_32 crypt32 bcrypt advapi32 iphlpapi ole32 oleaut32 gdi32)
 endif()
 
 # X11 + extensions Xext (XShm, voir capture_linux.c) et Xtst (XTest, voir

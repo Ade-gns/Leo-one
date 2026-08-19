@@ -73,6 +73,24 @@ leo_rd_capture_t *leo_rd_capture_open(int max_width, int max_height);
  */
 bool leo_rd_capture_grab(leo_rd_capture_t *cap, leo_rd_frame_t *out);
 
+/* ─── Utilitaires de capture partagés entre plateformes ───────────────────
+ * (remote_desktop.c) — utilisés par capture_linux.c ET capture_win.c pour
+ * éviter de dupliquer le même calcul de mise à l'échelle. */
+
+/** Calcule la résolution de sortie (<= max_w×max_h, ratio préservé) à
+ *  partir de la résolution physique src_w×src_h — out_w/out_h == src_w/src_h
+ *  si l'écran tient déjà dans les bornes (pas de mise à l'échelle). */
+void leo_rd_compute_output_size(int src_w, int src_h, int max_w, int max_h, int *out_w, int *out_h);
+
+/** Recopie/réduit une image BGRX 32bpp packée (stride en octets, peut
+ *  inclure du padding de fin de ligne) vers dst (déjà alloué par l'appelant,
+ *  out_w×out_h, toujours packé sans padding) — simple recopie ligne à ligne
+ *  si out_w/out_h == src_w/src_h (ne fait que retirer un padding éventuel),
+ *  plus proche voisin sinon (largement suffisant pour un flux à qualité
+ *  JPEG modérée, pas besoin d'un filtre de zone/bilinéaire). */
+void leo_rd_repack_scale(uint8_t *dst, int out_w, int out_h,
+                          const uint8_t *src, int src_w, int src_h, int src_stride);
+
 void leo_rd_capture_close(leo_rd_capture_t *cap);
 
 /* ─── Injection d'input ───────────────────────────────────────────────────── */

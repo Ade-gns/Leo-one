@@ -29,6 +29,51 @@
 /* leo_crypto_x509_fingerprint_matches() — même pinning que connection.c. */
 #include "crypto.h"
 
+/* ─── Utilitaires de capture partagés entre plateformes ───────────────────
+ * Voir remote_desktop.h — utilisés par capture_linux.c ET capture_win.c
+ * (phase Windows) pour ne pas dupliquer le même calcul de mise à l'échelle
+ * par plateforme. */
+
+void leo_rd_compute_output_size(int src_w, int src_h, int max_w, int max_h, int *out_w, int *out_h) {
+    if (src_w <= max_w && src_h <= max_h) {
+        *out_w = src_w;
+        *out_h = src_h;
+        return;
+    }
+    double scale = 1.0;
+    if (src_w > max_w) scale = (double)max_w / (double)src_w;
+    if (src_h > max_h) {
+        double scale_h = (double)max_h / (double)src_h;
+        if (scale_h < scale) scale = scale_h;
+    }
+    *out_w = (int)(src_w * scale);
+    *out_h = (int)(src_h * scale);
+    if (*out_w < 1) *out_w = 1;
+    if (*out_h < 1) *out_h = 1;
+}
+
+void leo_rd_repack_scale(uint8_t *dst, int out_w, int out_h,
+                          const uint8_t *src, int src_w, int src_h, int src_stride) {
+    if (out_w == src_w && out_h == src_h) {
+        for (int y = 0; y < src_h; y++) {
+            memcpy(dst + (size_t)y * out_w * 4,
+                   src + (size_t)y * src_stride,
+                   (size_t)out_w * 4);
+        }
+        return;
+    }
+
+    for (int y = 0; y < out_h; y++) {
+        int sy = (int)((int64_t)y * src_h / out_h);
+        const uint8_t *src_row = src + (size_t)sy * src_stride;
+        uint8_t *dst_row = dst + (size_t)y * out_w * 4;
+        for (int x = 0; x < out_w; x++) {
+            int sx = (int)((int64_t)x * src_w / out_w);
+            memcpy(dst_row + (size_t)x * 4, src_row + (size_t)sx * 4, 4);
+        }
+    }
+}
+
 /* ─── Types de message du protocole binaire de la connexion dédiée ───────── */
 
 #define _RD_WIRE_FRAME         0x01

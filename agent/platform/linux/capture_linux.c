@@ -63,25 +63,6 @@ static bool _visual_supported(Display *dpy, int screen) {
            vis->blue_mask == 0x000000FF;
 }
 
-static void _compute_output_size(int screen_w, int screen_h, int max_w, int max_h,
-                                  int *out_w, int *out_h) {
-    if (screen_w <= max_w && screen_h <= max_h) {
-        *out_w = screen_w;
-        *out_h = screen_h;
-        return;
-    }
-    double scale = 1.0;
-    if (screen_w > max_w) scale = (double)max_w / (double)screen_w;
-    if (screen_h > max_h) {
-        double scale_h = (double)max_h / (double)screen_h;
-        if (scale_h < scale) scale = scale_h;
-    }
-    *out_w = (int)(screen_w * scale);
-    *out_h = (int)(screen_h * scale);
-    if (*out_w < 1) *out_w = 1;
-    if (*out_h < 1) *out_h = 1;
-}
-
 static bool _try_setup_shm(leo_rd_capture_t *cap) {
     if (!XShmQueryExtension(cap->dpy)) return false;
 
@@ -153,7 +134,7 @@ leo_rd_capture_t *leo_rd_capture_open(int max_width, int max_height) {
 
     cap->screen_w = DisplayWidth(cap->dpy, cap->screen);
     cap->screen_h = DisplayHeight(cap->dpy, cap->screen);
-    _compute_output_size(cap->screen_w, cap->screen_h, max_width, max_height, &cap->out_w, &cap->out_h);
+    leo_rd_compute_output_size(cap->screen_w, cap->screen_h, max_width, max_height, &cap->out_w, &cap->out_h);
 
     cap->out_buf = malloc((size_t)cap->out_w * (size_t)cap->out_h * 4);
     if (!cap->out_buf) {
@@ -172,45 +153,22 @@ leo_rd_capture_t *leo_rd_capture_open(int max_width, int max_height) {
     return cap;
 }
 
-/** Recopie/réduit `src` (bytes_per_line `stride`, screen_w×screen_h) dans
- *  cap->out_buf (packé, out_w×out_h) — même chemin que la capture soit
- *  identique en résolution (simple recopie ligne à ligne, pour retirer le
- *  padding éventuel de bytes_per_line) ou réduite (plus proche voisin :
- *  largement suffisant pour un flux de bureau à distance à qualité JPEG
- *  modérée, pas besoin d'un filtre de zone/bilinéaire). */
-static void _repack_and_scale(leo_rd_capture_t *cap, const uint8_t *src, int stride) {
-    if (cap->out_w == cap->screen_w && cap->out_h == cap->screen_h) {
-        for (int y = 0; y < cap->screen_h; y++) {
-            memcpy(cap->out_buf + (size_t)y * cap->out_w * 4,
-                   src + (size_t)y * stride,
-                   (size_t)cap->out_w * 4);
-        }
-        return;
-    }
-
-    for (int y = 0; y < cap->out_h; y++) {
-        int sy = (int)((int64_t)y * cap->screen_h / cap->out_h);
-        const uint8_t *src_row = src + (size_t)sy * stride;
-        uint8_t *dst_row = cap->out_buf + (size_t)y * cap->out_w * 4;
-        for (int x = 0; x < cap->out_w; x++) {
-            int sx = (int)((int64_t)x * cap->screen_w / cap->out_w);
-            memcpy(dst_row + (size_t)x * 4, src_row + (size_t)sx * 4, 4);
-        }
-    }
-}
-
 bool leo_rd_capture_grab(leo_rd_capture_t *cap, leo_rd_frame_t *out) {
     if (!cap || !out) return false;
 
     if (cap->use_shm) {
         if (!XShmGetImage(cap->dpy, cap->root, cap->ximage, 0, 0, AllPlanes)) return false;
-        _repack_and_scale(cap, (const uint8_t *)cap->ximage->data, cap->ximage->bytes_per_line);
+        leo_rd_repack_scale(cap->out_buf, cap->out_w, cap->out_h,
+                             (const uint8_t *)cap->ximage->data, cap->screen_w, cap->screen_h,
+                             cap->ximage->bytes_per_line);
     } else {
         XImage *img = XGetImage(cap->dpy, cap->root, 0, 0,
                                  (unsigned int)cap->screen_w, (unsigned int)cap->screen_h,
                                  AllPlanes, ZPixmap);
         if (!img) return false;
-        _repack_and_scale(cap, (const uint8_t *)img->data, img->bytes_per_line);
+        leo_rd_repack_scale(cap->out_buf, cap->out_w, cap->out_h,
+                             (const uint8_t *)img->data, cap->screen_w, cap->screen_h,
+                             img->bytes_per_line);
         XDestroyImage(img);
     }
 
