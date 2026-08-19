@@ -584,6 +584,26 @@ bool leo_rd_start(leo_conn_t *conn, const leo_config_t *config,
     return true;
 }
 
+/* Attend que _rd_session_thread se termine (g_rd_thread_running repasse à
+ * false), borné par deadline. Partagé par leo_rd_stop() et
+ * leo_rd_stop_all() : les deux ont besoin de la même garantie avant de
+ * rendre la main à leur appelant (voir leurs commentaires respectifs pour
+ * pourquoi). lws_service() étant appelé avec un timeout de 10ms (voir
+ * _rd_session_thread), should_stop est observé quasi immédiatement — pas
+ * besoin de lws_cancel_service() ici. */
+static bool _rd_wait_thread_exit(struct timespec deadline) {
+    pthread_mutex_lock(&g_rd_exit_mutex);
+    bool exited = true;
+    while (g_rd_thread_running) {
+        if (pthread_cond_timedwait(&g_rd_exit_cond, &g_rd_exit_mutex, &deadline) == ETIMEDOUT) {
+            exited = false;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_rd_exit_mutex);
+    return exited;
+}
+
 void leo_rd_stop(const char *session_id) {
     pthread_mutex_lock(&g_rd_mutex);
     if (!g_rd_ctx) {
@@ -599,6 +619,32 @@ void leo_rd_stop(const char *session_id) {
     }
     g_rd_ctx->should_stop = true;
     pthread_mutex_unlock(&g_rd_mutex);
+
+    /* Attente bornée AVANT de rendre la main au dispatch de commandes
+     * (agent.c:_dispatch_remote_desktop_stop, même thread que le traitement
+     * des commandes suivantes sur le canal de contrôle) : sans elle,
+     * g_rd_ctx restait non-NULL le temps que le thread de session finisse
+     * réellement sa fermeture (capture X11, connexion WS dédiée...), et un
+     * REMOTE_DESKTOP_START arrivant juste après (cas typique : bascule
+     * vue -> contrôle côté navigateur, qui enchaîne STOP puis START sans
+     * attendre) se faisait rejeter par leo_rd_start() ("session déjà
+     * active") alors que la session précédente était déjà censée être
+     * terminée — bug confirmé en conditions réelles (bureau à distance
+     * bloqué ~30s, jusqu'à pairTimeout côté relais backend). Bornée à 2s
+     * (plus court que les 5s de leo_rd_stop_all(), qui bloque l'arrêt de
+     * l'agent entier — ici on ne bloque que le traitement de la commande
+     * suivante sur le canal de contrôle, pas question de le faire
+     * indéfiniment) : la fermeture réelle est de l'ordre de quelques
+     * lws_service() de 10ms, 2s laisse une marge très large.
+     */
+    struct timespec deadline;
+    clock_gettime(CLOCK_REALTIME, &deadline);
+    deadline.tv_sec += 2;
+    if (!_rd_wait_thread_exit(deadline)) {
+        LOG_WARN("Bureau à distance : thread de session non joignable après 2s "
+                 "(session_id=%s) — une nouvelle demande de session pourrait "
+                 "être rejetée à tort", session_id ? session_id : "?");
+    }
 }
 
 bool leo_rd_stop_all(void) {
@@ -609,24 +655,12 @@ bool leo_rd_stop_all(void) {
     /* Attente bornée du thread de session — même raisonnement que
      * leo_conn_destroy() dans connection.c : l'appelant (leo_agent_stop) ne
      * doit jamais libérer ag (dont config/conn sont référencés par ce
-     * thread) tant qu'on n'a pas la certitude qu'il s'est terminé.
-     * lws_service() étant appelé avec un timeout de 10ms (voir
-     * _rd_session_thread), should_stop est observé quasi immédiatement —
-     * pas besoin de lws_cancel_service() ici. */
+     * thread) tant qu'on n'a pas la certitude qu'il s'est terminé. */
     struct timespec deadline;
     clock_gettime(CLOCK_REALTIME, &deadline);
     deadline.tv_sec += 5;
 
-    pthread_mutex_lock(&g_rd_exit_mutex);
-    bool exited = true;
-    while (g_rd_thread_running) {
-        if (pthread_cond_timedwait(&g_rd_exit_cond, &g_rd_exit_mutex, &deadline) == ETIMEDOUT) {
-            exited = false;
-            break;
-        }
-    }
-    pthread_mutex_unlock(&g_rd_exit_mutex);
-
+    bool exited = _rd_wait_thread_exit(deadline);
     if (!exited) {
         LOG_ERROR("Bureau à distance : thread de session non joignable après 5s — abandon "
                   "(fuite volontaire, évite un use-after-free tant qu'il tourne encore)");

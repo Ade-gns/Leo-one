@@ -34,16 +34,30 @@ export default function RemoteDesktopPage() {
   const [ended, setEnded] = useState(false)
   const sessionIdRef = useRef<string | null>(null)
 
-  // Compteur de génération : la création de session est asynchrone
-  // (mutation React Query), mais le nettoyage de l'effet ci-dessous peut
-  // s'exécuter AVANT que la réponse n'arrive — notamment en développement,
-  // où StrictMode monte délibérément chaque effet deux fois (monte →
-  // nettoie → remonte) pour révéler ce genre de race. Sans ce garde-fou,
-  // la session créée par le premier montage reste orpheline côté
-  // backend/agent (jamais arrêtée) pendant que le second montage en crée
-  // une autre. Incrémenté à chaque démarrage ET à chaque nettoyage : une
-  // réponse dont la génération ne correspond plus à la génération courante
-  // est d'une session déjà abandonnée, qu'on arrête au lieu d'afficher.
+  // Compteur de génération : filet de sécurité pour le cas où l'effet
+  // ci-dessous se démonte pour de bon (navigation réelle) pendant qu'une
+  // création de session est encore en vol — la réponse tardive est alors
+  // arrêtée au lieu d'être affichée. Incrémenté à chaque démarrage ET à
+  // chaque nettoyage.
+  //
+  // Ne suffit PAS, à lui seul, à couvrir le double-montage StrictMode
+  // (monte → nettoie → remonte, développement uniquement — mais aussi en
+  // "production" tant que docker-compose sert le frontend via `vite dev`,
+  // voir infra/docker/frontend.Dockerfile) : les DEUX montages envoient
+  // chacun un vrai POST de création de session, dont l'un est accepté par
+  // l'agent (une seule session active à la fois, arbitrée côté agent selon
+  // l'ORDRE D'ARRIVÉE de la commande START sur le canal de contrôle) et
+  // l'autre rejeté. Rien ne garantit que cet ordre corresponde à l'ordre
+  // des réponses HTTP reçues par le navigateur (planification réseau/
+  // goroutines indépendante) — un vrai test bureau à distance de bout en
+  // bout a confirmé le cas où le générateur ci-dessous, se fiant à l'ordre
+  // de réponse, arrêtait la session que l'agent avait justement acceptée
+  // et gardait celle qu'il avait rejetée : plus aucune paire agent/
+  // navigateur possible, la session orpheline restait bloquée
+  // "SESSION_ALREADY_ACTIVE" jusqu'à l'expiration du pairTimeout (30s) côté
+  // relais. D'où le setTimeout(0) dans l'effet : il empêche le premier
+  // montage StrictMode d'émettre la moindre requête avant d'être nettoyé,
+  // au lieu d'essayer de démêler après coup deux requêtes déjà parties.
   const generationRef = useRef(0)
 
   // Démarre une nouvelle session (réutilisé au montage, au changement de
@@ -69,8 +83,15 @@ export default function RemoteDesktopPage() {
   }
 
   useEffect(() => {
-    startSession()
+    // Différé d'un tick : le double-montage StrictMode (monte -> nettoie ->
+    // remonte) s'exécute entièrement de façon synchrone, avant qu'aucun
+    // timer ne puisse se déclencher. Le nettoyage du premier montage annule
+    // donc ce timer avant qu'il n'appelle startSession() — ce montage
+    // jetable n'envoie alors jamais de requête, il n'y a plus deux sessions
+    // à départager après coup (voir le commentaire de generationRef).
+    const timer = setTimeout(startSession, 0)
     return () => {
+      clearTimeout(timer)
       generationRef.current++
       if (agentId && sessionIdRef.current) {
         void remoteDesktopApi.stopSession(agentId, sessionIdRef.current)
