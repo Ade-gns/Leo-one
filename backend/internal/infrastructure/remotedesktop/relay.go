@@ -51,15 +51,25 @@ func isInputMessage(payload []byte) bool {
 	}
 }
 
-// pairTimeout borne le temps d'attente du second côté (agent ou navigateur)
-// une fois le premier connecté — au-delà, la session est terminée plutôt que
-// de laisser un goroutine/une connexion WS ouverte indéfiniment côté seul.
-// Volontairement indépendant du TTL des jetons (qui borne l'attente *avant*
-// la première connexion) : une fois un côté effectivement connecté, on ne
-// veut pas dépendre d'une horloge d'expiration de jeton déjà consommé.
-// var plutôt que const : les tests de ce package raccourcissent ce délai
-// pour ne pas attendre 30 secondes réelles (voir relay_test.go).
-var pairTimeout = 30 * time.Second
+// defaultPairTimeout borne le temps d'attente du second côté (agent ou
+// navigateur) une fois le premier connecté — au-delà, la session est
+// terminée plutôt que de laisser un goroutine/une connexion WS ouverte
+// indéfiniment côté seul. Volontairement indépendant du TTL des jetons (qui
+// borne l'attente *avant* la première connexion) : une fois un côté
+// effectivement connecté, on ne veut pas dépendre d'une horloge d'expiration
+// de jeton déjà consommé.
+//
+// Porté par chaque *Relay (champ pairTimeout) plutôt qu'une var de paquet
+// partagée : un test qui raccourcit ce délai (voir relay_test.go) le fait
+// sur SA propre instance de Relay, sans pouvoir affecter — ni être affecté
+// par — un goroutine waitPairTimeout laissé en vie par un test précédent
+// (chaque test crée son propre Relay). Une var de paquet partagée provoquait
+// une race sous -race : un goroutine orphelin d'un test antérieur (ex.
+// TestRelay_EndSessionsForAgent_ClosesConnectionsAndMarksEnded, dont le
+// premier attach() spawn un waitPairTimeout avant que le second côté ne se
+// connecte) pouvait encore lire la var au moment où TestRelay_PairTimeout_EndsUnpairedSession
+// l'écrasait.
+const defaultPairTimeout = 30 * time.Second
 
 const (
 	maxRemoteDesktopMessageBytes = 8 << 20
@@ -81,8 +91,9 @@ type Relay struct {
 	sessions      map[string]*liveSession
 	endedSessions map[string]struct{}
 
-	repo   rdDomain.Repository
-	logger *slog.Logger
+	repo        rdDomain.Repository
+	logger      *slog.Logger
+	pairTimeout time.Duration
 }
 
 type liveSession struct {
@@ -119,6 +130,7 @@ func NewRelay(repo rdDomain.Repository, logger *slog.Logger) *Relay {
 		endedSessions: make(map[string]struct{}),
 		repo:          repo,
 		logger:        logger,
+		pairTimeout:   defaultPairTimeout,
 	}
 }
 
@@ -194,7 +206,7 @@ func (r *Relay) attach(sess *rdDomain.Session, conn *websocket.Conn, isAgent boo
 }
 
 func (r *Relay) waitPairTimeout(ls *liveSession) {
-	time.Sleep(pairTimeout)
+	time.Sleep(r.pairTimeout)
 
 	r.mu.Lock()
 	stillWaiting := r.sessions[ls.sessionID] == ls && !(ls.agentConn != nil && ls.viewerConn != nil)

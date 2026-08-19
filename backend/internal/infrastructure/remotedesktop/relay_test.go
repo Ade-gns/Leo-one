@@ -200,12 +200,9 @@ func TestRelay_EndSessionsForAgent_ClosesConnectionsAndMarksEnded(t *testing.T) 
 }
 
 func TestRelay_PairTimeout_EndsUnpairedSession(t *testing.T) {
-	orig := pairTimeout
-	pairTimeout = 100 * time.Millisecond
-	defer func() { pairTimeout = orig }()
-
 	repo := newFakeRepo()
 	relay := NewRelay(repo, testLogger())
+	relay.pairTimeout = 100 * time.Millisecond
 	srv := newTestServer(t, relay)
 
 	agentConn := dialWS(t, srv, "/agent?id=sess-4&agent_id=agent-4&mode=control")
